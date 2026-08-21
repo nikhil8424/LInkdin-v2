@@ -1,0 +1,3 @@
+protected_attribute,counterfactual_value,sample_count,mean_original_score,mean_counterfactual_score,mean_score_difference,mean_absolute_score_difference,maximum_absolute_score_difference,changed_predictions,percentage_predictions_changed
+gender,Male,30000,0.52048033,0.52048033,0.0,0.0,0.0,0,0.0
+gender,Female,30000,0.52048033,0.52048033,0.0,0.0,0.0,0,0.0

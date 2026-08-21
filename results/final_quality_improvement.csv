@@ -1,0 +1,4 @@
+Metric,Baseline_to_Fairness,Baseline_to_Pareto
+Precision@10,0.0,0.0
+Recall@10,0.0,0.0
+NDCG@10,0.0,0.0

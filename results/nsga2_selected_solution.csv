@@ -1,0 +1,2 @@
+fairness_strength,precision_at_10,recall_at_10,ndcg_at_10,gender_spd,gender_di,age_group_spd,age_group_di,location_spd,location_di,fairness_gap,ndcg_normalized,balanced_score,average_DI,objective_quality,objective_fairness,quality_normalized,fairness_normalized
+1.0,0.5544996031746032,1.0,0.906167344002693,-0.0017953991904837,0.9967205405552708,-0.0065500886986183,0.9881027576484344,-0.0101390086327531,0.9816694979932804,0.011169067934338028,1.0,1.0,0.988830932065662,-0.906167344002693,0.011169067934338028,1.0,1.0

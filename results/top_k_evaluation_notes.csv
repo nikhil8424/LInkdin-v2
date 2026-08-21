@@ -1,0 +1,6 @@
+item,value
+Number of users,3000
+Total interaction records,30000
+Candidates per user,10.0
+Top-K,10
+Recall@10 status,Excluded because K equals candidate count
