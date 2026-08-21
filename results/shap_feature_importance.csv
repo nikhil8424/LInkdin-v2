@@ -1,38 +1,38 @@
 feature,mean_absolute_shap
-author_user_similarity,0.3188929
-topic_similarity,0.2964593
-post_age_hours,0.17983344
-engagement,0.1522077
-network_distance,0.10675884
-previous_interactions,0.10050847
-experience_years,0.05491747
-network_size,0.039044864
-author_experience,0.036998384
-author_network_size,0.035674885
-education_Masters,0.018106394
-professional_field_Design,0.016694918
-professional_field_Computer Science,0.015895922
-content_type_Job Opportunity,0.013848981
-post_topic_AI,0.010928336
-post_topic_Data Science,0.009281727
-professional_field_Data Science,0.008600419
-content_type_Text,0.008056132
-post_topic_Finance,0.007898441
-content_type_Image,0.007743923
-content_type_Article,0.0068078986
-professional_field_HR,0.006086196
-education_Diploma,0.0060560615
-post_topic_Career,0.005895714
-post_topic_Machine Learning,0.00547222
-content_type_Video,0.004651686
-professional_field_Engineering,0.0045799166
-post_topic_Marketing,0.0044809263
-professional_field_Finance,0.0044239303
-professional_field_Business,0.0043421607
-post_topic_Leadership,0.004261241
-education_Bachelors,0.0041399878
-education_PhD,0.003581666
-post_topic_Design,0.0032413686
-professional_field_Marketing,0.003140494
-professional_field_Other,0.0030361337
-post_topic_Software,0.0026078841
+author_user_similarity,0.32614177
+topic_similarity,0.28810543
+post_age_hours,0.17043513
+engagement,0.16459449
+network_distance,0.11507383
+previous_interactions,0.08067817
+experience_years,0.06442021
+author_network_size,0.03793391
+author_experience,0.037480287
+network_size,0.033953995
+education_Diploma,0.019762196
+content_type_Job Opportunity,0.011748357
+professional_field_Design,0.011663868
+post_topic_AI,0.011390284
+education_Bachelors,0.010579175
+education_Masters,0.008233008
+education_PhD,0.00773941
+post_topic_Data Science,0.007653984
+professional_field_Data Science,0.0076369904
+professional_field_Computer Science,0.0073398533
+content_type_Video,0.005905778
+content_type_Article,0.0058478573
+professional_field_Business,0.0056701847
+content_type_Text,0.005509744
+post_topic_Design,0.0053931135
+post_topic_Finance,0.004486586
+content_type_Image,0.0040928647
+post_topic_Software,0.0039847065
+post_topic_Leadership,0.0037124816
+professional_field_HR,0.0036358307
+professional_field_Engineering,0.0035555302
+professional_field_Marketing,0.0030544112
+professional_field_Finance,0.0030234552
+post_topic_Marketing,0.0029970738
+post_topic_Career,0.0028113667
+post_topic_Machine Learning,0.0028050155
+professional_field_Other,0.0022334266

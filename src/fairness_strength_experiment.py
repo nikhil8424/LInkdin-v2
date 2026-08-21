@@ -2,1043 +2,266 @@ import joblib
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-
 from pathlib import Path
-from sklearn.metrics import ndcg_score
 
-
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-DATA_PATH = (
-    BASE_DIR
-    / "data"
-    / "synthetic_linkedin_dataset_30000.csv"
+from src.config import (
+    RESULTS_DIR,
+    MODELS_DIR,
+    PROTECTED_ATTRIBUTES,
+    FAIRNESS_STRENGTHS,
+    DEFAULT_K
 )
+from src.fairness_mitigation import rerank_candidates, compare_rankings
+from src.top_k_recommender import evaluate_user_recommendations
+from src.fairness_analysis import compute_group_fairness_metrics
+from src.intersectional_fairness import compute_intersectional_table
 
-MODEL_PATH = (
-    BASE_DIR
-    / "models"
-    / "xgboost_baseline.pkl"
-)
+def run_fairness_strength_experiment():
+    print("=" * 60)
+    print("FAIRNESS STRENGTH EXPERIMENTAL SWEEP [0.0 TO 1.0]")
+    print("=" * 60)
 
-ENCODER_PATH = (
-    BASE_DIR
-    / "results"
-    / "categorical_encoder.pkl"
-)
+    test_split_path = RESULTS_DIR / "test_split.csv"
+    X_test_path = RESULTS_DIR / "X_test.csv"
+    model_path = MODELS_DIR / "xgboost_baseline.pkl"
 
-RESULTS_PATH = (
-    BASE_DIR
-    / "results"
-)
+    test_df = pd.read_csv(test_split_path)
+    X_test = pd.read_csv(X_test_path)
+    model = joblib.load(model_path)
 
+    # 1. Baseline Scores
+    test_df["baseline_score"] = model.predict_proba(X_test)[:, 1]
+    test_df = test_df.sort_values(["user_id", "baseline_score"], ascending=[True, False]).copy()
+    test_df["baseline_rank"] = test_df.groupby("user_id").cumcount() + 1
+    test_df["rank"] = test_df["baseline_rank"]
 
+    # Precompute group inverse mean calibration stats
+    group_stats = {}
+    for attr in PROTECTED_ATTRIBUTES:
+        g_means = test_df.groupby(attr)["baseline_score"].mean()
+        overall = test_df["baseline_score"].mean()
+        corr = (overall / g_means).clip(0.80, 1.25)
+        group_stats[attr] = corr.to_dict()
 
-K = 10
+    obj_config = {"group_stats": group_stats}
 
-FAIRNESS_STRENGTHS = [
-    0.0,
-    0.1,
-    0.2,
-    0.3,
-    0.4,
-    0.5,
-    0.6,
-    0.7,
-    0.8,
-    0.9,
-    1.0
-]
+    all_sweep_results = []
+    final_fairness_top10 = None
 
-PROTECTED_ATTRIBUTES = [
-    "gender",
-    "age_group",
-    "location"
-]
+    for strength in FAIRNESS_STRENGTHS:
+        print(f"Testing Fairness Strength: {strength:.1f} ...")
 
-CATEGORICAL_FEATURES = [
-    "professional_field",
-    "education",
-    "post_topic",
-    "content_type"
-]
+        # Vectorized reranking
+        strength_df = rerank_candidates(test_df, "baseline_score", PROTECTED_ATTRIBUTES, strength, obj_config)
 
-NUMERICAL_FEATURES = [
-    "experience_years",
-    "network_size",
-    "previous_interactions",
-    "engagement",
-    "author_user_similarity",
-    "topic_similarity",
-    "post_age_hours",
-    "author_experience",
-    "author_network_size",
-    "network_distance"
-]
+        if strength == 1.0:
+            final_fairness_top10 = strength_df[strength_df["fairness_rank"] <= DEFAULT_K].copy()
 
-MODEL_FEATURES = (
-    CATEGORICAL_FEATURES
-    + NUMERICAL_FEATURES
-)
+        # Quality Evaluation
+        user_eval = evaluate_user_recommendations(strength_df, "fairness_score")
+        p5 = user_eval["precision_at_5"].mean()
+        p10 = user_eval["precision_at_10"].mean()
+        r5 = user_eval["recall_at_5"].dropna().mean()
+        r10 = user_eval["recall_at_10"].dropna().mean()
+        ndcg5 = user_eval["ndcg_at_5"].dropna().mean()
+        ndcg10 = user_eval["ndcg_at_10"].dropna().mean()
 
+        # Ranking Change Diagnostics
+        diag_df = compare_rankings(test_df, strength_df, DEFAULT_K)
+        pct_users_changed = float(diag_df["top_k_changed"].mean() * 100)
+        pct_items_moved = float((diag_df["items_entered_top_k"] > 0).mean() * 100)
+        top_k_overlap = float(diag_df["top_k_overlap"].mean())
+        top_k_jaccard = float(diag_df["top_k_jaccard"].mean())
 
+        # Multiplier stats
+        multipliers = strength_df["fairness_multiplier"]
+        mean_mult = float(multipliers.mean())
+        min_mult = float(multipliers.min())
+        max_mult = float(multipliers.max())
 
-print("=" * 60)
-print("CHECKING REQUIRED FILES")
-print("=" * 60)
+        # Marginal Fairness Evaluation
+        _, fair_summary = compute_group_fairness_metrics(strength_df, "fairness_rank", "fairness_score")
+        fair_dict = fair_summary.set_index("protected_attribute").to_dict(orient="index")
 
-for path in [
-    DATA_PATH,
-    MODEL_PATH,
-    ENCODER_PATH
-]:
+        gender_exp_di = fair_dict["gender"]["exposure_DI"]
+        age_exp_di = fair_dict["age_group"]["exposure_DI"]
+        loc_exp_di = fair_dict["location"]["exposure_DI"]
 
-    if not path.exists():
+        gender_sel_di = fair_dict["gender"]["selection_rate_DI"]
+        age_sel_di = fair_dict["age_group"]["selection_rate_DI"]
+        loc_sel_di = fair_dict["location"]["selection_rate_DI"]
 
-        raise FileNotFoundError(
-            f"Required file not found:\n{path}"
-        )
+        gender_spd = fair_dict["gender"]["exposure_SPD"]
+        age_spd = fair_dict["age_group"]["exposure_SPD"]
+        loc_spd = fair_dict["location"]["exposure_SPD"]
 
-    print("✓", path)
+        # Intersectional Evaluation (3-way)
+        df_3way = compute_intersectional_table(strength_df, ["gender", "age_group", "location"], "fairness_rank", "fairness_score")
+        stable_3way = df_3way[~df_3way["statistically_unstable"]]
+        worst_int_di = float(stable_3way["exposure_DI"].min() if len(stable_3way) > 0 else df_3way["exposure_DI"].min())
+        max_int_gap = float(1.0 - worst_int_di)
 
-print()
+        avg_exp_di = (gender_exp_di + age_exp_di + loc_exp_di) / 3.0
+        fairness_gap = abs(1.0 - avg_exp_di)
 
+        all_sweep_results.append({
+            "fairness_strength": strength,
+            "precision_at_5": p5,
+            "precision_at_10": p10,
+            "recall_at_5": r5,
+            "recall_at_10": r10,
+            "ndcg_at_5": ndcg5,
+            "ndcg_at_10": ndcg10,
+            "gender_exposure_di": gender_exp_di,
+            "age_exposure_di": age_exp_di,
+            "location_exposure_di": loc_exp_di,
+            "gender_selection_di": gender_sel_di,
+            "age_selection_di": age_sel_di,
+            "location_selection_di": loc_sel_di,
+            "gender_spd": gender_spd,
+            "age_group_spd": age_spd,
+            "location_spd": loc_spd,
+            "average_exposure_di": avg_exp_di,
+            "fairness_gap": fairness_gap,
+            "worst_intersectional_di": worst_int_di,
+            "max_intersectional_gap": max_int_gap,
+            "top_k_overlap": top_k_overlap,
+            "top_k_jaccard": top_k_jaccard,
+            "percentage_users_changed": pct_users_changed,
+            "percentage_items_moved": pct_items_moved,
+            "mean_fairness_multiplier": mean_mult,
+            "min_fairness_multiplier": min_mult,
+            "max_fairness_multiplier": max_mult
+        })
 
-
-print("=" * 60)
-print("LOADING DATASET")
-print("=" * 60)
-
-df = pd.read_csv(
-    DATA_PATH
-)
-
-print(
-    "Dataset shape:",
-    df.shape
-)
-
-print()
-
-
-
-print("=" * 60)
-print("LOADING XGBOOST MODEL")
-print("=" * 60)
-
-model = joblib.load(
-    MODEL_PATH
-)
-
-print(
-    "Model loaded successfully."
-)
-
-print()
-
-
-
-encoder = joblib.load(
-    ENCODER_PATH
-)
-
-print(
-    "Encoder loaded successfully."
-)
-
-print()
-
-
-
-print("=" * 60)
-print("PREPARING MODEL FEATURES")
-print("=" * 60)
-
-X = df[
-    MODEL_FEATURES
-].copy()
-
-
-X_categorical = encoder.transform(
-    X[CATEGORICAL_FEATURES]
-)
-
-
-encoded_feature_names = (
-    encoder.get_feature_names_out(
-        CATEGORICAL_FEATURES
+    sweep_df = pd.DataFrame(all_sweep_results)
+    
+    # Normalizations
+    min_ndcg, max_ndcg = sweep_df["ndcg_at_10"].min(), sweep_df["ndcg_at_10"].max()
+    sweep_df["ndcg_normalized"] = (
+        (sweep_df["ndcg_at_10"] - min_ndcg) / (max_ndcg - min_ndcg)
+        if max_ndcg > min_ndcg else 1.0
     )
-)
-
-
-X_categorical = pd.DataFrame(
-    X_categorical,
-    columns=encoded_feature_names,
-    index=X.index
-)
-
-
-X_numerical = X[
-    NUMERICAL_FEATURES
-].copy()
-
-
-X_processed = pd.concat(
-    [
-        X_numerical,
-        X_categorical
-    ],
-    axis=1
-)
-
-
-print(
-    "Processed feature shape:",
-    X_processed.shape
-)
-
-print()
-
-
-
-print("=" * 60)
-print("GENERATING BASELINE SCORES")
-print("=" * 60)
-
-df["baseline_score"] = (
-    model.predict_proba(
-        X_processed
-    )[:, 1]
-)
-
-
-print(
-    "Baseline scores generated."
-)
-
-print()
-
-
-
-def apply_fairness_adjustment(
-    data,
-    strength
-):
-
-    result = data.copy()
-
-    result["fairness_multiplier"] = 1.0
-
-
-  
-    overall_mean = (
-        result["baseline_score"]
-        .mean()
-    )
-
-
-
-    for attribute in PROTECTED_ATTRIBUTES:
-
-        group_means = (
-            result.groupby(
-                attribute
-            )[
-                "baseline_score"
-            ]
-            .mean()
-        )
-
-
-        correction = (
-            overall_mean
-            / group_means
-        )
-
-
-        # Prevent extreme corrections
-
-        correction = correction.clip(
-            lower=0.80,
-            upper=1.20
-        )
-
-
-        row_correction = (
-            result[attribute]
-            .map(correction)
-            .fillna(1.0)
-        )
-
-
-        result["fairness_multiplier"] *= (
-
-            1
-            + strength
-            * (
-                row_correction - 1
-            )
-
-        )
-
-
-  
-    result["fairness_score"] = (
-
-        result["baseline_score"]
-        * result["fairness_multiplier"]
-
-    )
-
-
-    result["fairness_score"] = (
-        result["fairness_score"]
-        .clip(
-            lower=0.0,
-            upper=1.0
-        )
-    )
-
-
-    return result
-
-
-def calculate_quality_metrics(
-    data,
-    score_column,
-    k=10
-):
-
-    precisions = []
-    recalls = []
-    ndcgs = []
-
-
-    for user_id, user_data in data.groupby(
-        "user_id"
-    ):
-
-        user_data = (
-            user_data
-            .sort_values(
-                score_column,
-                ascending=False
-            )
-        )
-
-
-        actual = (
-            user_data[
-                "interaction"
-            ]
-            .to_numpy()
-        )
-
-
-        scores = (
-            user_data[
-                score_column
-            ]
-            .to_numpy()
-        )
-
-
-        if len(actual) == 0:
-            continue
-
-
-        top_k = actual[:k]
-
-        precisions.append(
-            top_k.mean()
-        )
-
-
-     
-        total_relevant = (
-            actual.sum()
-        )
-
-
-        if total_relevant > 0:
-
-            recalls.append(
-                top_k.sum()
-                / total_relevant
-            )
-
-
-        if len(actual) >= 2:
-
-            try:
-
-                ndcg = ndcg_score(
-                    [actual],
-                    [scores],
-                    k=min(
-                        k,
-                        len(actual)
-                    )
-                )
-
-                ndcgs.append(
-                    ndcg
-                )
-
-            except ValueError:
-
-                pass
-
-
-    return {
-
-        "precision_at_10":
-            np.mean(
-                precisions
-            ),
-
-        "recall_at_10":
-            np.mean(
-                recalls
-            ),
-
-        "ndcg_at_10":
-            np.mean(
-                ndcgs
-            )
-            if ndcgs
-            else np.nan
-    }
-
-
-
-def calculate_fairness_metrics(
-    data,
-    score_column,
-    attribute
-):
-
-    group_scores = (
-        data.groupby(
-            attribute
-        )[
-            score_column
-        ]
-        .mean()
-    )
-
-
-    max_score = (
-        group_scores.max()
-    )
-
-    min_score = (
-        group_scores.min()
-    )
-
-
-    spd = (
-        min_score
-        - max_score
-    )
-
-
-    if max_score != 0:
-
-        di = (
-            min_score
-            / max_score
-        )
-
-    else:
-
-        di = np.nan
-
-
-    return spd, di
-
-
-
-print("=" * 60)
-print("RUNNING FAIRNESS STRENGTH EXPERIMENT")
-print("=" * 60)
-
-print()
-
-all_results = []
-
-
-for strength in FAIRNESS_STRENGTHS:
-
-    print(
-        f"Testing fairness strength: "
-        f"{strength:.1f}"
-    )
-
-
-    adjusted_df = (
-        apply_fairness_adjustment(
-            df,
-            strength
-        )
-    )
-
-
- 
-    adjusted_df = (
-        adjusted_df
-        .sort_values(
-            [
-                "user_id",
-                "fairness_score"
-            ],
-            ascending=[
-                True,
-                False
-            ]
-        )
-    )
-
-
-    adjusted_df["fairness_rank"] = (
-        adjusted_df
-        .groupby(
-            "user_id"
-        )
-        .cumcount()
-        + 1
-    )
-
-
-    top_k_df = (
-        adjusted_df[
-            adjusted_df[
-                "fairness_rank"
-            ] <= K
-        ]
-        .copy()
-    )
-
-
-
-    quality = (
-        calculate_quality_metrics(
-            top_k_df,
-            "fairness_score",
-            K
-        )
-    )
-
-
-
-    gender_spd, gender_di = (
-        calculate_fairness_metrics(
-            top_k_df,
-            "fairness_score",
-            "gender"
-        )
-    )
-
-
-    age_spd, age_di = (
-        calculate_fairness_metrics(
-            top_k_df,
-            "fairness_score",
-            "age_group"
-        )
-    )
-
-
-    location_spd, location_di = (
-        calculate_fairness_metrics(
-            top_k_df,
-            "fairness_score",
-            "location"
-        )
-    )
-
-
-  
-    all_results.append({
-
-        "fairness_strength":
-            strength,
-
-        "precision_at_10":
-            quality[
-                "precision_at_10"
-            ],
-
-        "recall_at_10":
-            quality[
-                "recall_at_10"
-            ],
-
-        "ndcg_at_10":
-            quality[
-                "ndcg_at_10"
-            ],
-
-        "gender_spd":
-            gender_spd,
-
-        "gender_di":
-            gender_di,
-
-        "age_group_spd":
-            age_spd,
-
-        "age_group_di":
-            age_di,
-
-        "location_spd":
-            location_spd,
-
-        "location_di":
-            location_di
-    })
-
-
-    print(
-        f"  NDCG@10       : "
-        f"{quality['ndcg_at_10']:.4f}"
-    )
-
-    print(
-        f"  Gender DI     : "
-        f"{gender_di:.4f}"
-    )
-
-    print(
-        f"  Age-group DI  : "
-        f"{age_di:.4f}"
-    )
-
-    print(
-        f"  Location DI   : "
-        f"{location_di:.4f}"
-    )
-
-    print()
-
-
-results_df = pd.DataFrame(
-    all_results
-)
-
-
-
-print("=" * 60)
-print("FAIRNESS STRENGTH RESULTS")
-print("=" * 60)
-
-print()
-
-print(
-    results_df.to_string(
-        index=False
-    )
-)
-
-print()
-
-
-
-print("=" * 60)
-print("BEST BALANCED CONFIGURATION")
-print("=" * 60)
-
-
-
-results_df["fairness_gap"] = (
-
-    abs(
-        1
-        - results_df[
-            "gender_di"
-        ]
-    )
-
-    +
-
-    abs(
-        1
-        - results_df[
-            "age_group_di"
-        ]
-    )
-
-    +
-
-    abs(
-        1
-        - results_df[
-            "location_di"
-        ]
-    )
-)
-
-
-
-max_ndcg = (
-    results_df[
-        "ndcg_at_10"
-    ].max()
-)
-
-
-min_ndcg = (
-    results_df[
-        "ndcg_at_10"
-    ].min()
-)
-
-
-if max_ndcg != min_ndcg:
-
-    results_df["ndcg_normalized"] = (
-
-        (
-            results_df[
-                "ndcg_at_10"
-            ]
-            - min_ndcg
-        )
-
-        /
-
-        (
-            max_ndcg
-            - min_ndcg
-        )
-    )
-
-else:
-
-    results_df[
-        "ndcg_normalized"
-    ] = 1.0
-
-
-results_df["balanced_score"] = (
-
-    results_df[
-        "ndcg_normalized"
-    ]
-
-    -
-
-    results_df[
-        "fairness_gap"
-    ]
-)
-
-
-best_row = (
-    results_df
-    .sort_values(
-        "balanced_score",
-        ascending=False
-    )
-    .iloc[0]
-)
-
-
-print(
-    "Best fairness strength:",
-    best_row[
-        "fairness_strength"
-    ]
-)
-
-print(
-    "NDCG@10:",
-    round(
-        best_row[
-            "ndcg_at_10"
-        ],
-        4
-    )
-)
-
-print(
-    "Gender DI:",
-    round(
-        best_row[
-            "gender_di"
-        ],
-        4
-    )
-)
-
-print(
-    "Age-group DI:",
-    round(
-        best_row[
-            "age_group_di"
-        ],
-        4
-    )
-)
-
-print(
-    "Location DI:",
-    round(
-        best_row[
-            "location_di"
-        ],
-        4
-    )
-)
-
-print(
-    "Balanced score:",
-    round(
-        best_row[
-            "balanced_score"
-        ],
-        4
-    )
-)
-
-print()
-
-
-
-print("=" * 60)
-print("SAVING EXPERIMENT RESULTS")
-print("=" * 60)
-
-
-results_path = (
-    RESULTS_PATH
-    / "fairness_strength_results.csv"
-)
-
-
-results_df.to_csv(
-    results_path,
-    index=False
-)
-
-
-print(
-    "Saved:"
-)
-
-print(
-    results_path
-)
-
-print()
-
-
-print("=" * 60)
-print("CREATING FAIRNESS VS QUALITY PLOT")
-print("=" * 60)
-
-
-plt.figure(
-    figsize=(10, 6)
-)
-
-
-plt.plot(
-    results_df[
-        "fairness_strength"
-    ],
-    results_df[
-        "ndcg_at_10"
-    ],
-    marker="o",
-    label="NDCG@10"
-)
-
-
-plt.xlabel(
-    "Fairness Strength"
-)
-
-plt.ylabel(
-    "NDCG@10"
-)
-
-plt.title(
-    "Recommendation Quality vs Fairness Strength"
-)
-
-plt.grid(
-    True,
-    alpha=0.3
-)
-
-plt.legend()
-
-plt.tight_layout()
-
-
-quality_plot_path = (
-    RESULTS_PATH
-    / "fairness_strength_ndcg.png"
-)
-
-
-plt.savefig(
-    quality_plot_path,
-    dpi=300,
-    bbox_inches="tight"
-)
-
-plt.close()
-
-
-print(
-    "Saved:"
-)
-
-print(
-    quality_plot_path
-)
-
-print()
-
-
-plt.figure(
-    figsize=(10, 6)
-)
-
-
-plt.plot(
-    results_df[
-        "fairness_strength"
-    ],
-    results_df[
-        "gender_di"
-    ],
-    marker="o",
-    label="Gender DI"
-)
-
-
-plt.plot(
-    results_df[
-        "fairness_strength"
-    ],
-    results_df[
-        "age_group_di"
-    ],
-    marker="o",
-    label="Age-group DI"
-)
-
-
-plt.plot(
-    results_df[
-        "fairness_strength"
-    ],
-    results_df[
-        "location_di"
-    ],
-    marker="o",
-    label="Location DI"
-)
-
-
-plt.axhline(
-    y=1.0,
-    linestyle="--",
-    linewidth=1
-)
-
-
-plt.xlabel(
-    "Fairness Strength"
-)
-
-plt.ylabel(
-    "Disparate Impact"
-)
-
-plt.title(
-    "Fairness Metrics vs Fairness Strength"
-)
-
-plt.grid(
-    True,
-    alpha=0.3
-)
-
-plt.legend()
-
-plt.tight_layout()
-
-
-fairness_plot_path = (
-    RESULTS_PATH
-    / "fairness_strength_di.png"
-)
-
-
-plt.savefig(
-    fairness_plot_path,
-    dpi=300,
-    bbox_inches="tight"
-)
-
-plt.close()
-
-
-print(
-    "Saved:"
-)
-
-print(
-    fairness_plot_path
-)
-
-print()
-
-
-
-print("=" * 60)
-print("FAIRNESS STRENGTH EXPERIMENT COMPLETED")
-print("=" * 60)
-
-print()
-
-print(
-    "Generated files:"
-)
-
-print(
-    "1. fairness_strength_results.csv"
-)
-
-print(
-    "2. fairness_strength_ndcg.png"
-)
-
-print(
-    "3. fairness_strength_di.png"
-)
-
-print()
-
-print(
-    "The experiment tested:"
-)
-
-print(
-    FAIRNESS_STRENGTHS
-)
-
-print()
-
-print(
-    "Results folder:"
-)
-
-print(
-    RESULTS_PATH
-)
+    sweep_df["balanced_score"] = 0.5 * sweep_df["ndcg_normalized"] + 0.5 * (1.0 - sweep_df["fairness_gap"])
+
+    # Backwards compatibility columns for app.py
+    sweep_df["gender_di"] = sweep_df["gender_exposure_di"]
+    sweep_df["age_group_di"] = sweep_df["age_exposure_di"]
+    sweep_df["location_di"] = sweep_df["location_exposure_di"]
+
+    results_csv_path = RESULTS_DIR / "fairness_strength_results.csv"
+    sweep_df.to_csv(results_csv_path, index=False)
+    print(f"\nSaved fairness sweep results to: {results_csv_path}")
+
+    # Generate Diagnostic Plots
+    generate_diagnostic_plots(sweep_df, test_df, final_fairness_top10)
+
+def generate_diagnostic_plots(sweep_df, test_df, final_fairness_top10):
+    print("Generating comprehensive diagnostic plots...")
+
+    # Plot 1: NDCG@10 vs Fairness Strength
+    plt.figure(figsize=(8, 5))
+    plt.plot(sweep_df["fairness_strength"], sweep_df["ndcg_at_10"], marker="o", color="#2563EB", linewidth=2.5)
+    plt.title("NDCG@10 vs. Fairness Strength", fontsize=14, pad=12)
+    plt.xlabel("Fairness Strength ($\lambda$)", fontsize=12)
+    plt.ylabel("NDCG@10", fontsize=12)
+    plt.grid(True, linestyle="--", alpha=0.6)
+    plt.tight_layout()
+    plt.savefig(RESULTS_DIR / "fairness_strength_ndcg.png", dpi=300)
+    plt.close()
+
+    # Plot 2: Recall@10 vs Fairness Strength
+    plt.figure(figsize=(8, 5))
+    plt.plot(sweep_df["fairness_strength"], sweep_df["recall_at_10"], marker="s", color="#10B981", linewidth=2.5)
+    plt.title("Recall@10 vs. Fairness Strength", fontsize=14, pad=12)
+    plt.xlabel("Fairness Strength ($\lambda$)", fontsize=12)
+    plt.ylabel("Recall@10", fontsize=12)
+    plt.grid(True, linestyle="--", alpha=0.6)
+    plt.tight_layout()
+    plt.savefig(RESULTS_DIR / "fairness_strength_recall.png", dpi=300)
+    plt.close()
+
+    # Plot 3: Exposure DI vs Fairness Strength
+    plt.figure(figsize=(8, 5))
+    plt.plot(sweep_df["fairness_strength"], sweep_df["gender_exposure_di"], marker="o", label="Gender Exposure DI", linewidth=2)
+    plt.plot(sweep_df["fairness_strength"], sweep_df["age_exposure_di"], marker="s", label="Age Exposure DI", linewidth=2)
+    plt.plot(sweep_df["fairness_strength"], sweep_df["location_exposure_di"], marker="^", label="Location Exposure DI", linewidth=2)
+    plt.axhline(1.0, color="gray", linestyle="--", alpha=0.7, label="Ideal Parity (1.0)")
+    plt.title("Exposure Disparate Impact vs. Fairness Strength", fontsize=14, pad=12)
+    plt.xlabel("Fairness Strength ($\lambda$)", fontsize=12)
+    plt.ylabel("Exposure DI (Min/Max Ratio)", fontsize=12)
+    plt.legend(loc="lower right")
+    plt.grid(True, linestyle="--", alpha=0.6)
+    plt.tight_layout()
+    plt.savefig(RESULTS_DIR / "fairness_strength_di.png", dpi=300)
+    plt.savefig(RESULTS_DIR / "fairness_strength_exposure_di.png", dpi=300)
+    plt.close()
+
+    # Plot 4: Selection DI vs Fairness Strength
+    plt.figure(figsize=(8, 5))
+    plt.plot(sweep_df["fairness_strength"], sweep_df["gender_selection_di"], marker="o", label="Gender Selection DI", linewidth=2)
+    plt.plot(sweep_df["fairness_strength"], sweep_df["age_selection_di"], marker="s", label="Age Selection DI", linewidth=2)
+    plt.plot(sweep_df["fairness_strength"], sweep_df["location_selection_di"], marker="^", label="Location Selection DI", linewidth=2)
+    plt.axhline(1.0, color="gray", linestyle="--", alpha=0.7, label="Ideal Parity (1.0)")
+    plt.title("Selection Rate DI vs. Fairness Strength", fontsize=14, pad=12)
+    plt.xlabel("Fairness Strength ($\lambda$)", fontsize=12)
+    plt.ylabel("Selection Rate DI", fontsize=12)
+    plt.legend(loc="lower right")
+    plt.grid(True, linestyle="--", alpha=0.6)
+    plt.tight_layout()
+    plt.savefig(RESULTS_DIR / "fairness_strength_selection_di.png", dpi=300)
+    plt.close()
+
+    # Plot 5: Worst Intersectional DI vs Fairness Strength
+    plt.figure(figsize=(8, 5))
+    plt.plot(sweep_df["fairness_strength"], sweep_df["worst_intersectional_di"], marker="d", color="#8B5CF6", linewidth=2.5)
+    plt.axhline(1.0, color="gray", linestyle="--", alpha=0.7, label="Ideal Parity (1.0)")
+    plt.title("Worst-Case Intersectional DI vs. Fairness Strength", fontsize=14, pad=12)
+    plt.xlabel("Fairness Strength ($\lambda$)", fontsize=12)
+    plt.ylabel("Worst Intersectional DI (3-Way)", fontsize=12)
+    plt.legend(loc="lower right")
+    plt.grid(True, linestyle="--", alpha=0.6)
+    plt.tight_layout()
+    plt.savefig(RESULTS_DIR / "fairness_strength_worst_intersectional_di.png", dpi=300)
+    plt.close()
+
+    # Plot 6: Percentage Users Changed & Top-K Overlap
+    fig, ax1 = plt.subplots(figsize=(8, 5))
+    ax1.plot(sweep_df["fairness_strength"], sweep_df["percentage_users_changed"], color="#EF4444", marker="o", linewidth=2.5, label="% Users Changed")
+    ax1.set_xlabel("Fairness Strength ($\lambda$)", fontsize=12)
+    ax1.set_ylabel("% Users with Changed Top-10", color="#EF4444", fontsize=12)
+    ax1.tick_params(axis="y", labelcolor="#EF4444")
+    ax1.grid(True, linestyle="--", alpha=0.6)
+
+    ax2 = ax1.twinx()
+    ax2.plot(sweep_df["fairness_strength"], sweep_df["top_k_overlap"], color="#3B82F6", marker="s", linewidth=2.5, linestyle="--", label="Top-10 Overlap")
+    ax2.set_ylabel("Average Top-10 Overlap", color="#3B82F6", fontsize=12)
+    ax2.tick_params(axis="y", labelcolor="#3B82F6")
+
+    plt.title("Reranking Dynamics Across Fairness Strengths", fontsize=14, pad=12)
+    plt.tight_layout()
+    plt.savefig(RESULTS_DIR / "fairness_strength_ranking_changes.png", dpi=300)
+    plt.close()
+
+    # Plot 7: Proxy Classifier AUCs
+    proxy_path = RESULTS_DIR / "proxy_attribute_prediction.csv"
+    if proxy_path.exists():
+        proxy_df = pd.read_csv(proxy_path)
+        plt.figure(figsize=(7, 4.5))
+        bars = plt.bar(proxy_df["protected_attribute"], proxy_df["ROC_AUC"], color=["#3B82F6", "#10B981", "#F59E0B"], width=0.5)
+        plt.axhline(0.5, color="gray", linestyle="--", label="Random Chance (0.50)")
+        plt.title("Proxy Prediction ROC-AUC by Sensitive Attribute", fontsize=13, pad=12)
+        plt.ylabel("ROC-AUC Score", fontsize=11)
+        plt.ylim(0.0, 1.0)
+        for bar in bars:
+            yval = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2.0, yval + 0.02, f"{yval:.3f}", ha="center", va="bottom", fontweight="bold")
+        plt.legend(loc="lower right")
+        plt.tight_layout()
+        plt.savefig(RESULTS_DIR / "proxy_attribute_auc.png", dpi=300)
+        plt.close()
+
+    print("All diagnostic plots generated and saved successfully.\n")
+
+if __name__ == "__main__":
+    run_fairness_strength_experiment()

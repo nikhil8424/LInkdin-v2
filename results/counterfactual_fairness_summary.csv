@@ -1,4 +1,4 @@
-protected_attribute,maximum_mean_absolute_difference,maximum_prediction_difference,total_changed_predictions
-gender,0.0,0.0,0
-age_group,0.0,0.0,0
-location,0.0,0.0,0
+protected_attribute,distinct_values_tested,max_absolute_score_change,changed_predictions_count,direct_invariance_status
+gender,2,0.0,0,Passed (Strictly Invariant)
+age_group,5,0.0,0,Passed (Strictly Invariant)
+location,9,0.0,0,Passed (Strictly Invariant)

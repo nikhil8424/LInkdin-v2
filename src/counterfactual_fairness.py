@@ -1,735 +1,217 @@
 import joblib
 import pandas as pd
 import numpy as np
-
 from pathlib import Path
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import roc_auc_score, balanced_accuracy_score, f1_score
+from sklearn.preprocessing import label_binarize
 
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-DATA_PATH = (
-    BASE_DIR
-    / "data"
-    / "synthetic_linkedin_dataset_30000.csv"
+from src.config import (
+    RESULTS_DIR,
+    MODELS_DIR,
+    PROTECTED_ATTRIBUTES,
+    MODEL_FEATURES,
+    CATEGORICAL_FEATURES,
+    NUMERICAL_FEATURES,
+    RANDOM_SEED
 )
 
-MODEL_PATH = (
-    BASE_DIR
-    / "models"
-    / "xgboost_baseline.pkl"
-)
-
-ENCODER_PATH = (
-    BASE_DIR
-    / "results"
-    / "categorical_encoder.pkl"
-)
-
-RESULTS_PATH = (
-    BASE_DIR
-    / "results"
-)
-
-
-
-PROTECTED_ATTRIBUTES = [
-    "gender",
-    "age_group",
-    "location"
-]
-
-
-CATEGORICAL_FEATURES = [
-    "professional_field",
-    "education",
-    "post_topic",
-    "content_type"
-]
-
-
-NUMERICAL_FEATURES = [
-    "experience_years",
-    "network_size",
-    "previous_interactions",
-    "engagement",
-    "author_user_similarity",
-    "topic_similarity",
-    "post_age_hours",
-    "author_experience",
-    "author_network_size",
-    "network_distance"
-]
-
-
-MODEL_FEATURES = (
-    CATEGORICAL_FEATURES
-    + NUMERICAL_FEATURES
-)
-
-print("=" * 60)
-print("CHECKING REQUIRED FILES")
-print("=" * 60)
-
-
-required_files = {
-    "Dataset": DATA_PATH,
-    "XGBoost model": MODEL_PATH,
-    "Categorical encoder": ENCODER_PATH
-}
-
-
-for name, path in required_files.items():
-
-    if not path.exists():
-
-        raise FileNotFoundError(
-            f"{name} not found:\n{path}"
-        )
-
-    print(f"✓ {path}")
-
-
-print()
-
-
-print("=" * 60)
-print("LOADING DATASET")
-print("=" * 60)
-
-
-df = pd.read_csv(
-    DATA_PATH
-)
-
-
-print(
-    "Dataset shape:",
-    df.shape
-)
-
-print()
-
-
-required_columns = (
-    MODEL_FEATURES
-    + PROTECTED_ATTRIBUTES
-    + ["interaction"]
-)
-
-
-missing_columns = [
-    column
-    for column in required_columns
-    if column not in df.columns
-]
-
-
-if missing_columns:
-
-    raise ValueError(
-        "Missing columns:\n"
-        + str(missing_columns)
-    )
-
-
-print("=" * 60)
-print("COLUMN VALIDATION")
-print("=" * 60)
-
-print("All required columns are present.")
-
-print()
-
-
-
-print("=" * 60)
-print("LOADING XGBOOST MODEL")
-print("=" * 60)
-
-
-model = joblib.load(
-    MODEL_PATH
-)
-
-
-print("Model loaded successfully.")
-
-print()
-
-
-print("=" * 60)
-print("LOADING CATEGORICAL ENCODER")
-print("=" * 60)
-
-
-encoder = joblib.load(
-    ENCODER_PATH
-)
-
-
-print("Encoder loaded successfully.")
-
-print()
-
-
-
-print("=" * 60)
-print("PREPARING MODEL FEATURES")
-print("=" * 60)
-
-
-X = df[
-    MODEL_FEATURES
-].copy()
-
-
-X_categorical = encoder.transform(
-    X[CATEGORICAL_FEATURES]
-)
-
-
-encoded_feature_names = (
-    encoder.get_feature_names_out(
-        CATEGORICAL_FEATURES
-    )
-)
-
-
-X_categorical = pd.DataFrame(
-    X_categorical,
-    columns=encoded_feature_names,
-    index=X.index
-)
-
-
-
-X_numerical = X[
-    NUMERICAL_FEATURES
-].copy()
-
-
-X_processed = pd.concat(
-    [
-        X_numerical,
-        X_categorical
-    ],
-    axis=1
-)
-
-
-print(
-    "Processed feature shape:",
-    X_processed.shape
-)
-
-print()
-
-
-print("=" * 60)
-print("GENERATING ORIGINAL PREDICTIONS")
-print("=" * 60)
-
-
-original_scores = model.predict_proba(
-    X_processed
-)[:, 1]
-
-
-df["original_prediction"] = (
-    original_scores
-)
-
-
-print(
-    "Original predictions generated."
-)
-
-print(
-    "Score range:",
-    round(original_scores.min(), 4),
-    "to",
-    round(original_scores.max(), 4)
-)
-
-print()
-
-
-def perform_counterfactual_analysis(
-    data,
-    attribute,
-    model,
-    encoder
-):
-
+def perform_direct_invariance_analysis(test_df, model, encoder):
+    """
+    Direct Sensitive Attribute Invariance Test:
+    Tests whether directly mutating protected attributes alters model predictions.
+    Since protected attributes are excluded from MODEL_FEATURES, direct variation
+    yields 0.0 prediction change, confirming direct attribute invariance.
+    """
+    print("=" * 60)
+    print("DIRECT SENSITIVE ATTRIBUTE INVARIANCE TEST")
     print("=" * 60)
 
-    print(
-        f"COUNTERFACTUAL ANALYSIS: {attribute.upper()}"
-    )
+    # Prepare baseline features
+    X = test_df[MODEL_FEATURES].copy()
+    X_cat = encoder.transform(X[CATEGORICAL_FEATURES])
+    encoded_feature_names = encoder.get_feature_names_out(CATEGORICAL_FEATURES)
+    X_cat_df = pd.DataFrame(X_cat, columns=encoded_feature_names)
+    X_num_df = X[NUMERICAL_FEATURES].reset_index(drop=True)
+    X_processed = pd.concat([X_num_df, X_cat_df], axis=1)
 
-    print("=" * 60)
+    original_scores = model.predict_proba(X_processed)[:, 1]
+    test_df["original_prediction"] = original_scores
 
+    all_invariance_results = []
+    summary_rows = []
 
-    attribute_values = (
-        data[attribute]
-        .dropna()
-        .unique()
-        .tolist()
-    )
+    for attr in PROTECTED_ATTRIBUTES:
+        attr_values = test_df[attr].dropna().unique().tolist()
+        attr_results = []
 
+        for cf_val in attr_values:
+            cf_df = test_df.copy()
+            cf_df[attr] = cf_val
 
-    print(
-        "Protected attribute values:",
-        attribute_values
-    )
+            # Features are derived from MODEL_FEATURES
+            X_cf = cf_df[MODEL_FEATURES].copy()
+            X_cf_cat = encoder.transform(X_cf[CATEGORICAL_FEATURES])
+            X_cf_cat_df = pd.DataFrame(X_cf_cat, columns=encoded_feature_names)
+            X_cf_num_df = X_cf[NUMERICAL_FEATURES].reset_index(drop=True)
+            X_cf_processed = pd.concat([X_cf_num_df, X_cf_cat_df], axis=1)
 
-    print()
+            cf_scores = model.predict_proba(X_cf_processed)[:, 1]
+            diff = cf_scores - original_scores
+            abs_diff = np.abs(diff)
+            changed_count = int(np.sum(abs_diff > 1e-9))
 
+            res = {
+                "protected_attribute": attr,
+                "counterfactual_value": cf_val,
+                "sample_count": len(test_df),
+                "mean_original_score": float(original_scores.mean()),
+                "mean_counterfactual_score": float(cf_scores.mean()),
+                "mean_score_difference": float(diff.mean()),
+                "mean_absolute_difference": float(abs_diff.mean()),
+                "maximum_absolute_difference": float(abs_diff.max()),
+                "changed_predictions": changed_count,
+                "percentage_predictions_changed": float(changed_count / len(test_df) * 100)
+            }
+            attr_results.append(res)
+            all_invariance_results.append(res)
 
-    results = []
+        attr_df = pd.DataFrame(attr_results)
+        attr_df.to_csv(RESULTS_DIR / f"counterfactual_{attr}.csv", index=False)
 
-
-    for counterfactual_value in attribute_values:
-
-     
-        counterfactual_df = data.copy()
-
-
-       
-        counterfactual_df[
-            attribute
-        ] = counterfactual_value
-
-
-        X_cf = counterfactual_df[
-            MODEL_FEATURES
-        ].copy()
-
-
-   
-        X_cf_categorical = encoder.transform(
-            X_cf[
-                CATEGORICAL_FEATURES
-            ]
-        )
-
-
-        X_cf_categorical = pd.DataFrame(
-            X_cf_categorical,
-            columns=encoded_feature_names,
-            index=X_cf.index
-        )
-
-
-        X_cf_numerical = X_cf[
-            NUMERICAL_FEATURES
-        ].copy()
-
-
-        X_cf_processed = pd.concat(
-            [
-                X_cf_numerical,
-                X_cf_categorical
-            ],
-            axis=1
-        )
-
-
-   
-        counterfactual_scores = (
-            model.predict_proba(
-                X_cf_processed
-            )[:, 1]
-        )
-
-
-        score_difference = (
-            counterfactual_scores
-            - data["original_prediction"].to_numpy()
-        )
-
-
-        absolute_difference = np.abs(
-            score_difference
-        )
-
-
-        mean_difference = (
-            score_difference.mean()
-        )
-
-
-        mean_absolute_difference = (
-            absolute_difference.mean()
-        )
-
-
-        max_absolute_difference = (
-            absolute_difference.max()
-        )
-
-
-        changed_predictions = (
-            np.sum(
-                absolute_difference > 1e-10
-            )
-        )
-
-
-        percentage_changed = (
-            changed_predictions
-            / len(data)
-            * 100
-        )
-
-
-        results.append({
-
-            "protected_attribute":
-                attribute,
-
-            "counterfactual_value":
-                counterfactual_value,
-
-            "sample_count":
-                len(data),
-
-            "mean_original_score":
-                data[
-                    "original_prediction"
-                ].mean(),
-
-            "mean_counterfactual_score":
-                counterfactual_scores.mean(),
-
-            "mean_score_difference":
-                mean_difference,
-
-            "mean_absolute_score_difference":
-                mean_absolute_difference,
-
-            "maximum_absolute_score_difference":
-                max_absolute_difference,
-
-            "changed_predictions":
-                changed_predictions,
-
-            "percentage_predictions_changed":
-                percentage_changed
+        summary_rows.append({
+            "protected_attribute": attr,
+            "distinct_values_tested": len(attr_values),
+            "max_absolute_score_change": float(attr_df["maximum_absolute_difference"].max()),
+            "changed_predictions_count": int(attr_df["changed_predictions"].sum()),
+            "direct_invariance_status": "Passed (Strictly Invariant)" if attr_df["maximum_absolute_difference"].max() < 1e-9 else "Failed"
         })
 
+    invariance_df = pd.DataFrame(all_invariance_results)
+    invariance_df.to_csv(RESULTS_DIR / "counterfactual_fairness.csv", index=False)
 
-        print(
-            f"Counterfactual value: "
-            f"{counterfactual_value}"
+    summary_df = pd.DataFrame(summary_rows)
+    summary_df.to_csv(RESULTS_DIR / "counterfactual_fairness_summary.csv", index=False)
+    print("Direct invariance summary:")
+    print(summary_df.to_string(index=False))
+
+def run_proxy_detection():
+    """
+    Proxy Detection:
+    Trains classifiers predicting each protected attribute from non-protected model features.
+    Quantifies potential indirect/proxy leakage in features like professional_field,
+    experience_years, education, network_size, etc.
+    """
+    print("\n" + "=" * 60)
+    print("PROXY DETECTION & FEATURE PREDICTIVE POWER ANALYSIS")
+    print("=" * 60)
+
+    X_train = pd.read_csv(RESULTS_DIR / "X_train.csv")
+    X_val = pd.read_csv(RESULTS_DIR / "X_val.csv")
+    X_test = pd.read_csv(RESULTS_DIR / "X_test.csv")
+
+    prot_train = pd.read_csv(RESULTS_DIR / "protected_train.csv")
+    prot_val = pd.read_csv(RESULTS_DIR / "protected_val.csv")
+    prot_test = pd.read_csv(RESULTS_DIR / "protected_test.csv")
+
+    prediction_results = []
+    feature_importances_all = []
+    proxy_feature_analysis = []
+
+    for attr in PROTECTED_ATTRIBUTES:
+        y_tr = prot_train[attr]
+        y_v = prot_val[attr]
+        y_te = prot_test[attr]
+
+        # Train a proxy detection classifier
+        clf = RandomForestClassifier(
+            n_estimators=100,
+            max_depth=8,
+            random_state=RANDOM_SEED,
+            n_jobs=-1
         )
+        clf.fit(X_train, y_tr)
 
-        print(
-            f"Mean score: "
-            f"{counterfactual_scores.mean():.6f}"
-        )
+        y_pred = clf.predict(X_test)
+        y_proba = clf.predict_proba(X_test)
 
-        print(
-            f"Mean difference: "
-            f"{mean_difference:.10f}"
-        )
+        classes = clf.classes_
+        bal_acc = balanced_accuracy_score(y_te, y_pred)
+        f1_macro = f1_score(y_te, y_pred, average="macro", zero_division=0)
 
-        print(
-            f"Predictions changed: "
-            f"{changed_predictions}"
-        )
+        # Multi-class / binary ROC-AUC
+        if len(classes) == 2:
+            auc = roc_auc_score(y_te, y_proba[:, 1])
+        else:
+            y_te_bin = label_binarize(y_te, classes=classes)
+            auc = roc_auc_score(y_te_bin, y_proba, multi_class="ovr", average="macro")
 
-        print()
+        # Proxy strength assessment
+        if auc >= 0.70:
+            proxy_risk = "High Proxy Signal"
+        elif auc >= 0.58:
+            proxy_risk = "Moderate Proxy Signal"
+        else:
+            proxy_risk = "Low / Noise Proxy Signal"
 
+        prediction_results.append({
+            "protected_attribute": attr,
+            "num_classes": len(classes),
+            "ROC_AUC": auc,
+            "balanced_accuracy": bal_acc,
+            "macro_F1": f1_macro,
+            "proxy_risk_level": proxy_risk
+        })
 
-    return pd.DataFrame(
-        results
+        # Feature importance for this protected attribute
+        for feat, imp in zip(X_train.columns, clf.feature_importances_):
+            feature_importances_all.append({
+                "protected_attribute": attr,
+                "feature": feat,
+                "importance": imp
+            })
+
+        # Top 3 most predictive features for this attribute
+        feat_df = pd.DataFrame({"feature": X_train.columns, "importance": clf.feature_importances_})
+        top_feats = feat_df.sort_values("importance", ascending=False).head(3)
+        for rank, (_, row) in enumerate(top_feats.iterrows(), 1):
+            proxy_feature_analysis.append({
+                "protected_attribute": attr,
+                "predictive_rank": rank,
+                "feature": row["feature"],
+                "importance_score": row["importance"],
+                "attribute_ROC_AUC": auc,
+                "proxy_risk_assessment": proxy_risk
+            })
+
+    pred_df = pd.DataFrame(prediction_results)
+    pred_df.to_csv(RESULTS_DIR / "proxy_attribute_prediction.csv", index=False)
+
+    imp_df = pd.DataFrame(feature_importances_all).sort_values(
+        ["protected_attribute", "importance"], ascending=[True, False]
     )
-
-
-gender_results = (
-    perform_counterfactual_analysis(
-        df,
-        "gender",
-        model,
-        encoder
-    )
-)
-
-
-
-age_results = (
-    perform_counterfactual_analysis(
-        df,
-        "age_group",
-        model,
-        encoder
-    )
-)
-
-
-location_results = (
-    perform_counterfactual_analysis(
-        df,
-        "location",
-        model,
-        encoder
-    )
-)
-
-
-print("=" * 60)
-print("COMBINING COUNTERFACTUAL RESULTS")
-print("=" * 60)
-
-
-counterfactual_results = pd.concat(
-    [
-        gender_results,
-        age_results,
-        location_results
-    ],
-    ignore_index=True
-)
-
-
-print(
-    counterfactual_results.to_string(
-        index=False
-    )
-)
-
-print()
-
-
-print("=" * 60)
-print("COUNTERFACTUAL FAIRNESS SUMMARY")
-print("=" * 60)
-
-
-summary = []
-
-
-for attribute in PROTECTED_ATTRIBUTES:
-
-    attribute_data = (
-        counterfactual_results[
-            counterfactual_results[
-                "protected_attribute"
-            ] == attribute
-        ]
-    )
-
-
-    summary.append({
-
-        "protected_attribute":
-            attribute,
-
-        "maximum_mean_absolute_difference":
-            attribute_data[
-                "mean_absolute_score_difference"
-            ].max(),
-
-        "maximum_prediction_difference":
-            attribute_data[
-                "maximum_absolute_score_difference"
-            ].max(),
-
-        "total_changed_predictions":
-            attribute_data[
-                "changed_predictions"
-            ].max()
-    })
-
-
-counterfactual_summary = pd.DataFrame(
-    summary
-)
-
-
-print(
-    counterfactual_summary.to_string(
-        index=False
-    )
-)
-
-print()
-
-
-print("=" * 60)
-print("COUNTERFACTUAL INTERPRETATION")
-print("=" * 60)
-
-
-print()
-print(
-    "The protected attributes gender, age_group,"
-)
-
-print(
-    "and location are not included directly"
-)
-
-print(
-    "in the XGBoost model features."
-)
-
-print()
-
-print(
-    "Therefore, changing only a protected"
-)
-
-print(
-    "attribute while keeping model features"
-)
-
-print(
-    "unchanged should not change the prediction."
-)
-
-print()
-
-print(
-    "A zero or near-zero counterfactual"
-)
-
-print(
-    "difference indicates no direct dependence"
-)
-
-print(
-    "on that protected attribute."
-)
-
-print()
-
-print(
-    "This does NOT prove complete fairness."
-)
-
-print(
-    "Indirect or proxy-based disparities can"
-)
-
-print(
-    "still exist through other model features."
-)
-
-print()
-
-
-
-print("=" * 60)
-print("SAVING COUNTERFACTUAL RESULTS")
-print("=" * 60)
-
-
-all_results_path = (
-    RESULTS_PATH
-    / "counterfactual_fairness.csv"
-)
-
-
-summary_path = (
-    RESULTS_PATH
-    / "counterfactual_fairness_summary.csv"
-)
-
-
-gender_path = (
-    RESULTS_PATH
-    / "counterfactual_gender.csv"
-)
-
-
-age_path = (
-    RESULTS_PATH
-    / "counterfactual_age_group.csv"
-)
-
-
-location_path = (
-    RESULTS_PATH
-    / "counterfactual_location.csv"
-)
-
-
-counterfactual_results.to_csv(
-    all_results_path,
-    index=False
-)
-
-
-counterfactual_summary.to_csv(
-    summary_path,
-    index=False
-)
-
-
-gender_results.to_csv(
-    gender_path,
-    index=False
-)
-
-
-age_results.to_csv(
-    age_path,
-    index=False
-)
-
-
-location_results.to_csv(
-    location_path,
-    index=False
-)
-
-
-print()
-print(
-    "1. counterfactual_fairness.csv"
-)
-
-print(
-    "2. counterfactual_fairness_summary.csv"
-)
-
-print(
-    "3. counterfactual_gender.csv"
-)
-
-print(
-    "4. counterfactual_age_group.csv"
-)
-
-print(
-    "5. counterfactual_location.csv"
-)
-
-print()
-
-
-print("=" * 60)
-print("COUNTERFACTUAL FAIRNESS ANALYSIS COMPLETED")
-print("=" * 60)
-
-print()
-
-print(
-    "Counterfactual analysis has been completed"
-)
-
-print(
-    "for gender, age_group, and location."
-)
-
-print()
-
-print(
-    "Results saved in:"
-)
-
-print(
-    RESULTS_PATH
-)
+    imp_df.to_csv(RESULTS_DIR / "proxy_feature_importance.csv", index=False)
+
+    analysis_df = pd.DataFrame(proxy_feature_analysis)
+    analysis_df.to_csv(RESULTS_DIR / "proxy_feature_analysis.csv", index=False)
+
+    print("Proxy Attribute Prediction Summary:")
+    print(pred_df.to_string(index=False))
+    print("\nTop Proxy Features by Protected Attribute:")
+    print(analysis_df.to_string(index=False))
+
+def run_counterfactual_fairness():
+    test_split_path = RESULTS_DIR / "test_split.csv"
+    encoder_path = RESULTS_DIR / "categorical_encoder.pkl"
+    model_path = MODELS_DIR / "xgboost_baseline.pkl"
+
+    test_df = pd.read_csv(test_split_path)
+    encoder = joblib.load(encoder_path)
+    model = joblib.load(model_path)
+
+    perform_direct_invariance_analysis(test_df, model, encoder)
+    run_proxy_detection()
+    print("\nCounterfactual & proxy diagnostics completed successfully.\n")
+
+if __name__ == "__main__":
+    run_counterfactual_fairness()

@@ -1,4 +1,4 @@
-Protected Attribute,DI Improvement: Fairness-aware,DI Improvement: Pareto-selected
-Gender,0.0049996800530242025,0.010026063368812621
-Age Group,0.006724218053845821,0.007026203091169414
-Location,0.008890313684968176,0.017834362348478017
+Protected Attribute,Baseline Exposure DI,Proposed Exposure DI,Absolute Gain,Percentage Improvement
+gender,0.9476137591581375,0.9476137591581375,0.0,+0.00%
+age_group,0.9792586118311524,0.9792586118311524,0.0,+0.00%
+location,0.8943953357295543,0.8943953357295543,0.0,+0.00%

@@ -1,0 +1,4 @@
+protected_attribute,num_classes,ROC_AUC,balanced_accuracy,macro_F1,proxy_risk_level
+gender,2,0.5153959972827336,0.5124483949093916,0.4379997814167836,Low / Noise Proxy Signal
+age_group,5,0.4620747354861384,0.19563860785107245,0.12750627164529024,Low / Noise Proxy Signal
+location,9,0.4964089856859444,0.12183112455831686,0.07300659547671329,Low / Noise Proxy Signal

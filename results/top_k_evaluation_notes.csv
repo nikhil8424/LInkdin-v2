@@ -1,6 +1,10 @@
 item,value
-Number of users,3000
-Total interaction records,30000
-Candidates per user,10.0
-Top-K,10
-Recall@10 status,Excluded because K equals candidate count
+Number of test users,450
+Total test interaction records,4434
+Min candidate count,1
+Max candidate count,24
+Mean candidate count,9.85
+Median candidate count,10.0
+Percentage users with < 10 candidates,46.00%
+Percentage users with >= 10 candidates,54.00%
+Evaluation methodology,Full candidate pools evaluated per user on held-out test split without truncation

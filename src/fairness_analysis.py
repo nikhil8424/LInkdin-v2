@@ -1,664 +1,155 @@
 import joblib
 import pandas as pd
-
+import numpy as np
 from pathlib import Path
-from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score
+
+from src.config import (
+    RESULTS_DIR,
+    PROTECTED_ATTRIBUTES,
+    DEFAULT_K
 )
 
-
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-DATA_PATH = (
-    BASE_DIR
-    / "data"
-    / "synthetic_linkedin_dataset_30000.csv"
-)
-
-RESULTS_PATH = BASE_DIR / "results"
-
-MODEL_PATH = (
-    BASE_DIR
-    / "models"
-    / "xgboost_baseline.pkl"
-)
-
-
-
-print("=" * 60)
-print("LOADING DATA")
-print("=" * 60)
-
-df = pd.read_csv(DATA_PATH)
-
-print("Dataset shape:", df.shape)
-print()
-
-
-if not MODEL_PATH.exists():
-
-    raise FileNotFoundError(
-        f"Baseline model not found:\n{MODEL_PATH}\n\n"
-        "Run recommendation.py first."
-    )
-
-
-model = joblib.load(MODEL_PATH)
-
-print("=" * 60)
-print("BASELINE MODEL LOADED")
-print("=" * 60)
-
-print(MODEL_PATH)
-print()
-
-
-CATEGORICAL_FEATURES = [
-    "professional_field",
-    "education",
-    "post_topic",
-    "content_type"
-]
-
-NUMERICAL_FEATURES = [
-    "experience_years",
-    "network_size",
-    "previous_interactions",
-    "engagement",
-    "author_user_similarity",
-    "topic_similarity",
-    "post_age_hours",
-    "author_experience",
-    "author_network_size",
-    "network_distance"
-]
-
-MODEL_FEATURES = (
-    CATEGORICAL_FEATURES
-    + NUMERICAL_FEATURES
-)
-
-
-ENCODER_PATH = (
-    RESULTS_PATH
-    / "categorical_encoder.pkl"
-)
-
-if not ENCODER_PATH.exists():
-
-    raise FileNotFoundError(
-        f"Encoder not found:\n{ENCODER_PATH}\n\n"
-        "Run data_preprocessing.py first."
-    )
-
-
-encoder = joblib.load(
-    ENCODER_PATH
-)
-
-print("=" * 60)
-print("ENCODER LOADED")
-print("=" * 60)
-
-print(ENCODER_PATH)
-print()
-
-
-X = df[
-    MODEL_FEATURES
-].copy()
-
-
-# Encode categorical variables
-
-X_cat = encoder.transform(
-    X[CATEGORICAL_FEATURES]
-)
-
-
-encoded_feature_names = (
-    encoder.get_feature_names_out(
-        CATEGORICAL_FEATURES
-    )
-)
-
-
-X_cat = pd.DataFrame(
-    X_cat,
-    columns=encoded_feature_names
-)
-
-
-# Numerical features
-
-X_num = (
-    X[NUMERICAL_FEATURES]
-    .reset_index(drop=True)
-)
-
-
-# Combine
-
-X_processed = pd.concat(
-    [
-        X_num,
-        X_cat
-    ],
-    axis=1
-)
-
-
-print("=" * 60)
-print("FEATURES PREPARED")
-print("=" * 60)
-
-print(
-    "Processed feature shape:",
-    X_processed.shape
-)
-
-print()
-
-print("=" * 60)
-print("GENERATING BASELINE PREDICTIONS")
-print("=" * 60)
-
-
-df["prediction_probability"] = (
-    model.predict_proba(
-        X_processed
-    )[:, 1]
-)
-
-
-df["predicted_interaction"] = (
-    model.predict(
-        X_processed
-    )
-)
-
-
-print("Predictions generated.")
-
-print()
-
-
-accuracy = accuracy_score(
-    df["interaction"],
-    df["predicted_interaction"]
-)
-
-precision = precision_score(
-    df["interaction"],
-    df["predicted_interaction"],
-    zero_division=0
-)
-
-recall = recall_score(
-    df["interaction"],
-    df["predicted_interaction"],
-    zero_division=0
-)
-
-f1 = f1_score(
-    df["interaction"],
-    df["predicted_interaction"],
-    zero_division=0
-)
-
-
-print("=" * 60)
-print("OVERALL BASELINE PERFORMANCE")
-print("=" * 60)
-
-print(
-    f"Accuracy  : {accuracy:.4f}"
-)
-
-print(
-    f"Precision : {precision:.4f}"
-)
-
-print(
-    f"Recall    : {recall:.4f}"
-)
-
-print(
-    f"F1 Score  : {f1:.4f}"
-)
-
-print()
-
-
-def calculate_group_metrics(
-    data,
-    protected_column
-):
-
-    results = []
-
-
-    for group, group_data in data.groupby(
-        protected_column
-    ):
-
-        actual = group_data[
-            "interaction"
-        ]
-
-        predicted = group_data[
-            "predicted_interaction"
-        ]
-
-        probability = group_data[
-            "prediction_probability"
-        ]
-
-
-        actual_positive_rate = (
-            actual.mean()
-        )
-
-
-        predicted_positive_rate = (
-            predicted.mean()
-        )
-
-
-        average_score = (
-            probability.mean()
-        )
-
-
-        group_accuracy = accuracy_score(
-            actual,
-            predicted
-        )
-
-
-        group_precision = precision_score(
-            actual,
-            predicted,
-            zero_division=0
-        )
-
-
-        group_recall = recall_score(
-            actual,
-            predicted,
-            zero_division=0
-        )
-
-
-        group_f1 = f1_score(
-            actual,
-            predicted,
-            zero_division=0
-        )
-
-
-        results.append({
-
-            protected_column: group,
-
-            "sample_count": len(group_data),
-
-            "actual_interaction_rate":
-                actual_positive_rate,
-
-            "predicted_positive_rate":
-                predicted_positive_rate,
-
-            "average_prediction_score":
-                average_score,
-
-            "accuracy":
-                group_accuracy,
-
-            "precision":
-                group_precision,
-
-            "recall":
-                group_recall,
-
-            "f1":
-                group_f1
+def compute_position_exposure(rank):
+    """
+    Position-weighted exposure: exposure(r) = 1 / log2(r + 1) for r >= 1.
+    """
+    return 1.0 / np.log2(rank + 1.0)
+
+def compute_group_fairness_metrics(test_df, rank_column="rank", score_column="recommendation_score", k=DEFAULT_K):
+    """
+    Computes score fairness, recommendation selection fairness, position-weighted
+    exposure fairness, and relevance-aware exposure fairness for each protected attribute.
+    """
+    # Filter to Top-K recommendations
+    top_k_df = test_df[test_df[rank_column] <= k].copy()
+    top_k_df["position_exposure"] = top_k_df[rank_column].apply(compute_position_exposure)
+
+    detailed_results = {}
+    summary_rows = []
+
+    for attr in PROTECTED_ATTRIBUTES:
+        # Group metrics across the entire candidate pool
+        group_pool_sizes = test_df.groupby(attr).size()
+        group_score_means = test_df.groupby(attr)[score_column].mean()
+        group_interaction_means = test_df.groupby(attr)["interaction"].mean()
+
+        # Group metrics across Top-K recommendations
+        group_top_k_counts = top_k_df.groupby(attr).size().reindex(group_pool_sizes.index, fill_value=0)
+        group_top_k_exposures = top_k_df.groupby(attr)["position_exposure"].sum().reindex(group_pool_sizes.index, fill_value=0.0)
+
+        # 1. Selection Rate = Top-K count / candidate count
+        selection_rates = group_top_k_counts / group_pool_sizes
+        
+        # 2. Mean Exposure = Total Position Exposure / candidate count
+        mean_exposures = group_top_k_exposures / group_pool_sizes
+        
+        # Exposure Share = group exposure / total exposure
+        total_exp = group_top_k_exposures.sum()
+        exposure_shares = group_top_k_exposures / (total_exp if total_exp > 0 else 1.0)
+
+        # 3. Relevance-Aware Exposure = Mean Exposure / Mean Relevance Score
+        relevance_ratios = mean_exposures / group_score_means.replace(0, np.nan)
+
+        # Disparate Impact & Statistical Parity Differences
+        # A. Score-based
+        score_min, score_max = group_score_means.min(), group_score_means.max()
+        score_di = score_min / score_max if score_max > 0 else np.nan
+        score_spd = score_min - score_max
+
+        # B. Selection Rate
+        sel_min, sel_max = selection_rates.min(), selection_rates.max()
+        sel_di = sel_min / sel_max if sel_max > 0 else np.nan
+        sel_spd = sel_min - sel_max
+
+        # C. Position Exposure
+        exp_min, exp_max = mean_exposures.min(), mean_exposures.max()
+        exp_di = exp_min / exp_max if exp_max > 0 else np.nan
+        exp_spd = exp_min - exp_max
+
+        # D. Relevance-Aware Exposure Disparity
+        rel_min, rel_max = relevance_ratios.min(), relevance_ratios.max()
+        rel_aware_di = rel_min / rel_max if rel_max > 0 else np.nan
+
+        attr_df = pd.DataFrame({
+            "group": group_pool_sizes.index,
+            "candidate_count": group_pool_sizes.values,
+            "top_k_count": group_top_k_counts.values,
+            "selection_rate": selection_rates.values,
+            "mean_score": group_score_means.values,
+            "mean_interaction_rate": group_interaction_means.values,
+            "total_exposure": group_top_k_exposures.values,
+            "exposure_share": exposure_shares.values,
+            "mean_position_exposure": mean_exposures.values,
+            "relevance_aware_ratio": relevance_ratios.values
+        })
+        detailed_results[attr] = attr_df
+
+        summary_rows.append({
+            "protected_attribute": attr,
+            "score_based_DI": score_di,
+            "score_based_SPD": score_spd,
+            "selection_rate_DI": sel_di,
+            "selection_rate_SPD": sel_spd,
+            "exposure_DI": exp_di,
+            "exposure_SPD": exp_spd,
+            "relevance_aware_exposure_DI": rel_aware_di
         })
 
-
-    return pd.DataFrame(results)
-
-
-print("=" * 60)
-print("GENDER FAIRNESS")
-print("=" * 60)
-
-
-gender_metrics = calculate_group_metrics(
-    df,
-    "gender"
-)
-
-
-print(
-    gender_metrics.to_string(
-        index=False
-    )
-)
-
-print()
-
-
-print("=" * 60)
-print("AGE-GROUP FAIRNESS")
-print("=" * 60)
-
-
-age_metrics = calculate_group_metrics(
-    df,
-    "age_group"
-)
-
-
-print(
-    age_metrics.to_string(
-        index=False
-    )
-)
-
-print()
-
-
-print("=" * 60)
-print("LOCATION FAIRNESS")
-print("=" * 60)
-
-
-location_metrics = calculate_group_metrics(
-    df,
-    "location"
-)
-
-
-print(
-    location_metrics.to_string(
-        index=False
-    )
-)
-
-print()
-
-
-def statistical_parity_difference(
-    data,
-    protected_column
-):
-
-    group_rates = (
-        data
-        .groupby(
-            protected_column
-        )["predicted_interaction"]
-        .mean()
-    )
-
-
-    if len(group_rates) < 2:
-
-        return None
-
-
-    max_rate = group_rates.max()
-
-    min_rate = group_rates.min()
-
-
-    return min_rate - max_rate
-
-
-def disparate_impact(
-    data,
-    protected_column
-):
-
-    group_rates = (
-        data
-        .groupby(
-            protected_column
-        )["predicted_interaction"]
-        .mean()
-    )
-
-
-    if len(group_rates) < 2:
-
-        return None
-
-
-    max_rate = group_rates.max()
-
-    min_rate = group_rates.min()
-
-
-    if max_rate == 0:
-
-        return None
-
-
-    return min_rate / max_rate
-
-gender_spd = (
-    statistical_parity_difference(
-        df,
-        "gender"
-    )
-)
-
-gender_di = (
-    disparate_impact(
-        df,
-        "gender"
-    )
-)
-
-
-age_spd = (
-    statistical_parity_difference(
-        df,
-        "age_group"
-    )
-)
-
-age_di = (
-    disparate_impact(
-        df,
-        "age_group"
-    )
-)
-
-
-location_spd = (
-    statistical_parity_difference(
-        df,
-        "location"
-    )
-)
-
-location_di = (
-    disparate_impact(
-        df,
-        "location"
-    )
-)
-
-
-print("=" * 60)
-print("FAIRNESS SUMMARY")
-print("=" * 60)
-
-print(
-    f"Gender SPD       : {gender_spd:.4f}"
-)
-
-print(
-    f"Gender DI        : {gender_di:.4f}"
-)
-
-print()
-
-print(
-    f"Age-group SPD    : {age_spd:.4f}"
-)
-
-print(
-    f"Age-group DI     : {age_di:.4f}"
-)
-
-print()
-
-print(
-    f"Location SPD     : {location_spd:.4f}"
-)
-
-print(
-    f"Location DI      : {location_di:.4f}"
-)
-
-print()
-
-
-gender_path = (
-    RESULTS_PATH
-    / "fairness_gender.csv"
-)
-
-age_path = (
-    RESULTS_PATH
-    / "fairness_age_group.csv"
-)
-
-location_path = (
-    RESULTS_PATH
-    / "fairness_location.csv"
-)
-
-
-gender_metrics.to_csv(
-    gender_path,
-    index=False
-)
-
-age_metrics.to_csv(
-    age_path,
-    index=False
-)
-
-location_metrics.to_csv(
-    location_path,
-    index=False
-)
-
-
-fairness_summary = pd.DataFrame({
-
-    "protected_attribute": [
-
-        "gender",
-
-        "age_group",
-
-        "location"
-    ],
-
-    "statistical_parity_difference": [
-
-        gender_spd,
-
-        age_spd,
-
-        location_spd
-    ],
-
-    "disparate_impact": [
-
-        gender_di,
-
-        age_di,
-
-        location_di
-    ]
-})
-
-
-summary_path = (
-    RESULTS_PATH
-    / "fairness_summary.csv"
-)
-
-
-fairness_summary.to_csv(
-    summary_path,
-    index=False
-)
-
-
-prediction_path = (
-    RESULTS_PATH
-    / "fairness_predictions.csv"
-)
-
-
-df[
-    [
-        "user_id",
-        "post_id",
-        "gender",
-        "age_group",
-        "location",
-        "interaction",
-        "prediction_probability",
-        "predicted_interaction"
-    ]
-].to_csv(
-    prediction_path,
-    index=False
-)
-
-
-print("=" * 60)
-print("FAIRNESS ANALYSIS COMPLETED")
-print("=" * 60)
-
-print()
-
-print("Saved files:")
-
-print(
-    "1. fairness_gender.csv"
-)
-
-print(
-    "2. fairness_age_group.csv"
-)
-
-print(
-    "3. fairness_location.csv"
-)
-
-print(
-    "4. fairness_summary.csv"
-)
-
-print(
-    "5. fairness_predictions.csv"
-)
-
-print()
-
-print("Results folder:")
-
-print(RESULTS_PATH)
+    summary_df = pd.DataFrame(summary_rows)
+    return detailed_results, summary_df
+
+def run_fairness_analysis():
+    print("=" * 60)
+    print("FAIRNESS ANALYSIS (SCORE FAIRNESS VS EXPOSURE FAIRNESS)")
+    print("=" * 60)
+
+    test_split_path = RESULTS_DIR / "test_split.csv"
+    top_10_path = RESULTS_DIR / "top_10_recommendations.csv"
+
+    if not test_split_path.exists() or not top_10_path.exists():
+        raise FileNotFoundError("Prerequisite recommendation files missing. Run top_k_recommender.py first.")
+
+    test_df = pd.read_csv(test_split_path)
+    top_10 = pd.read_csv(top_10_path)
+
+    model_path = RESULTS_DIR.parent / "models" / "xgboost_baseline.pkl"
+    X_test_path = RESULTS_DIR / "X_test.csv"
+    model = joblib.load(model_path)
+    X_test = pd.read_csv(X_test_path)
+    
+    test_df["recommendation_score"] = model.predict_proba(X_test)[:, 1]
+    test_df = test_df.sort_values(["user_id", "recommendation_score"], ascending=[True, False]).copy()
+    test_df["rank"] = test_df.groupby("user_id").cumcount() + 1
+
+    detailed_results, summary_df = compute_group_fairness_metrics(test_df)
+
+    # Save detailed attribute files
+    detailed_results["gender"].to_csv(RESULTS_DIR / "fairness_gender.csv", index=False)
+    detailed_results["age_group"].to_csv(RESULTS_DIR / "fairness_age_group.csv", index=False)
+    detailed_results["location"].to_csv(RESULTS_DIR / "fairness_location.csv", index=False)
+
+    summary_df.to_csv(RESULTS_DIR / "fairness_summary.csv", index=False)
+    summary_df.to_csv(RESULTS_DIR / "top_k_fairness_metrics.csv", index=False)
+
+    # Detailed exposure fairness file
+    exposure_rows = []
+    for attr, df_attr in detailed_results.items():
+        for _, r in df_attr.iterrows():
+            exposure_rows.append({
+                "attribute": attr,
+                "group": r["group"],
+                "candidate_count": r["candidate_count"],
+                "top_k_count": r["top_k_count"],
+                "selection_rate": r["selection_rate"],
+                "exposure_share": r["exposure_share"],
+                "mean_position_exposure": r["mean_position_exposure"],
+                "relevance_aware_ratio": r["relevance_aware_ratio"]
+            })
+    pd.DataFrame(exposure_rows).to_csv(RESULTS_DIR / "exposure_fairness.csv", index=False)
+
+    print("\nFairness Summary Across Protected Attributes:")
+    print(summary_df.to_string(index=False))
+    print("\nFairness analysis completed successfully.\n")
+
+if __name__ == "__main__":
+    run_fairness_analysis()

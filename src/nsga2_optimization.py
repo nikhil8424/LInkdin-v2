@@ -1,841 +1,330 @@
+import joblib
 import pandas as pd
 import numpy as np
-
+import matplotlib.pyplot as plt
 from pathlib import Path
 
-import matplotlib.pyplot as plt
-
-from sklearn.metrics import ndcg_score
-
-
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-DATA_PATH = (
-    BASE_DIR
-    / "data"
-    / "synthetic_linkedin_dataset_30000.csv"
+from src.config import (
+    RESULTS_DIR,
+    MODELS_DIR,
+    PROTECTED_ATTRIBUTES,
+    DEFAULT_K,
+    RANDOM_SEED
 )
-
-RESULTS_PATH = (
-    BASE_DIR
-    / "results"
-)
-
-
-
-K = 10
-
-PROTECTED_ATTRIBUTES = [
-    "gender",
-    "age_group",
-    "location"
-]
-
-
-# Fairness-strength values already tested in the
-# previous experiment.
-
-STRENGTH_VALUES = np.arange(
-    0.0,
-    1.01,
-    0.1
-)
-
-
-print("=" * 60)
-print("CHECKING REQUIRED FILES")
-print("=" * 60)
-
-
-if not DATA_PATH.exists():
-
-    raise FileNotFoundError(
-        f"Dataset not found:\n{DATA_PATH}"
-    )
-
-
-STRENGTH_RESULTS_PATH = (
-    RESULTS_PATH
-    / "fairness_strength_results.csv"
-)
-
-
-if not STRENGTH_RESULTS_PATH.exists():
-
-    raise FileNotFoundError(
-        "fairness_strength_results.csv not found.\n"
-        "Run fairness_strength_experiment.py first."
-    )
-
-
-print("✓ Dataset found")
-print("✓ Fairness strength results found")
-
-print()
-
-print("=" * 60)
-print("LOADING DATA")
-print("=" * 60)
-
-
-df = pd.read_csv(
-    DATA_PATH
-)
-
-
-print(
-    "Dataset shape:",
-    df.shape
-)
-
-print()
-
-
-
-# 5. LOAD FAIRNESS-STRENGTH RESULTS
-# ============================================================
-
-print("=" * 60)
-print("LOADING CANDIDATE SOLUTIONS")
-print("=" * 60)
-
-
-strength_results = pd.read_csv(
-    STRENGTH_RESULTS_PATH
-)
-
-
-print(
-    "Candidate solutions:",
-    len(strength_results)
-)
-
-print()
-
-# 6. VERIFY REQUIRED COLUMNS
-# ============================================================
-
-required_columns = [
-    "fairness_strength",
-    "precision_at_10",
-    "recall_at_10",
-    "ndcg_at_10",
-    "gender_di",
-    "age_group_di",
-    "location_di"
-]
-
-
-missing_columns = [
-    column
-    for column in required_columns
-    if column not in strength_results.columns
-]
-
-
-if missing_columns:
-
-    raise ValueError(
-        f"Missing columns:\n{missing_columns}"
-    )
-
-
-
-# 7. CREATE FAIRNESS OBJECTIVE
-# ============================================================
-
-print("=" * 60)
-print("CALCULATING MULTI-OBJECTIVE VALUES")
-print("=" * 60)
-
-
-# We want all DI values as close to 1 as possible.
-
-strength_results[
-    "average_DI"
-] = (
-
-    strength_results[
-        [
-            "gender_di",
-            "age_group_di",
-            "location_di"
-        ]
-    ]
-    .mean(axis=1)
-)
-
-
-# Fairness gap from ideal DI = 1.
-
-strength_results[
-    "fairness_gap"
-] = (
-
-    1
-    - strength_results[
-        "average_DI"
-    ]
-).abs()
-
-
-
-
-
-strength_results[
-    "objective_quality"
-] = (
-    -strength_results[
-        "ndcg_at_10"
-    ]
-)
-
-
-strength_results[
-    "objective_fairness"
-] = (
-    strength_results[
-        "fairness_gap"
-    ]
-)
-
-
-print(
-    strength_results[
-        [
-            "fairness_strength",
-            "ndcg_at_10",
-            "average_DI",
-            "fairness_gap"
-        ]
-    ].to_string(
-        index=False
-    )
-)
-
-print()
-
-
-# 9. PARETO DOMINANCE FUNCTION
-# ============================================================
-
-def dominates(
-    point_a,
-    point_b
-):
-
-    """
-    Return True if point A dominates point B.
-
-    Both objectives are minimized.
-
-    A dominates B when:
-
-    A is no worse than B
-    in every objective
-
-    AND
-
-    A is strictly better in at least
-    one objective.
-    """
-
-    no_worse = (
-        point_a[0] <= point_b[0]
-        and
-        point_a[1] <= point_b[1]
-    )
-
-
-    strictly_better = (
-        point_a[0] < point_b[0]
-        or
-        point_a[1] < point_b[1]
-    )
-
-
-    return (
-        no_worse
-        and
-        strictly_better
-    )
-
-
-# 10. FIND PARETO FRONT
-# ============================================================
-
-def find_pareto_front(
-    dataframe
-):
-
-    pareto_indices = []
-
-
-    objective_values = (
-        dataframe[
-            [
-                "objective_quality",
-                "objective_fairness"
-            ]
-        ]
-        .to_numpy()
-    )
-
-
-    for i in range(
-        len(objective_values)
+from src.fairness_mitigation import rerank_candidates
+from src.top_k_recommender import evaluate_user_recommendations
+from src.fairness_analysis import compute_group_fairness_metrics
+from src.intersectional_fairness import compute_intersectional_table
+
+class NSGA2Optimizer:
+    def __init__(
+        self,
+        test_df,
+        pop_size=30,
+        generations=15,
+        crossover_prob=0.9,
+        mutation_prob=0.2,
+        seed=RANDOM_SEED
     ):
+        self.test_df = test_df
+        self.pop_size = pop_size
+        self.generations = generations
+        self.crossover_prob = crossover_prob
+        self.mutation_prob = mutation_prob
+        self.rng = np.random.default_rng(seed)
+        
+        self.group_stats = {}
+        for attr in PROTECTED_ATTRIBUTES:
+            g_means = test_df.groupby(attr)["baseline_score"].mean()
+            overall = test_df["baseline_score"].mean()
+            self.group_stats[attr] = (overall / g_means).clip(0.80, 1.25).to_dict()
 
-        dominated = False
+    def evaluate_individual(self, chromosome):
+        l_strength, exp_w, int_w, trade_p = chromosome
+        
+        obj_config = {
+            "group_stats": self.group_stats,
+            "exp_weight": exp_w,
+            "int_weight": int_w,
+            "trade_param": trade_p
+        }
 
+        # Fast vectorized candidate reranking
+        sol_df = rerank_candidates(self.test_df, "baseline_score", PROTECTED_ATTRIBUTES, l_strength, obj_config)
 
-        for j in range(
-            len(objective_values)
-        ):
+        user_eval = evaluate_user_recommendations(sol_df, "fairness_score")
+        ndcg10 = float(user_eval["ndcg_at_10"].dropna().mean())
+        prec10 = float(user_eval["precision_at_10"].mean())
+        rec10 = float(user_eval["recall_at_10"].dropna().mean())
 
-            if i == j:
+        _, fair_summary = compute_group_fairness_metrics(sol_df, "fairness_rank", "fairness_score")
+        fair_dict = fair_summary.set_index("protected_attribute").to_dict(orient="index")
 
-                continue
+        g_di = fair_dict["gender"]["exposure_DI"]
+        a_di = fair_dict["age_group"]["exposure_DI"]
+        l_di = fair_dict["location"]["exposure_DI"]
+        avg_exp_di = float((g_di + a_di + l_di) / 3.0)
+        exp_gap = float(abs(1.0 - avg_exp_di))
 
+        df_3way = compute_intersectional_table(sol_df, ["gender", "age_group", "location"], "fairness_rank", "fairness_score")
+        stable_3way = df_3way[~df_3way["statistically_unstable"]]
+        worst_int_di = float(stable_3way["exposure_DI"].min() if len(stable_3way) > 0 else df_3way["exposure_DI"].min())
+        int_gap = float(1.0 - worst_int_di)
 
-            if dominates(
-                objective_values[j],
-                objective_values[i]
-            ):
+        objectives = [-ndcg10, exp_gap, int_gap]
+        metrics = {
+            "ndcg_at_10": ndcg10,
+            "precision_at_10": prec10,
+            "recall_at_10": rec10,
+            "gender_di": g_di,
+            "age_group_di": a_di,
+            "location_di": l_di,
+            "average_exposure_di": avg_exp_di,
+            "fairness_gap": exp_gap,
+            "worst_intersectional_di": worst_int_di,
+            "max_intersectional_gap": int_gap
+        }
+        return objectives, metrics
 
-                dominated = True
+    def fast_non_dominated_sort(self, pop_objs):
+        num_inds = len(pop_objs)
+        domination_counts = [0] * num_inds
+        dominated_indices = [[] for _ in range(num_inds)]
+        fronts = [[]]
 
-                break
+        for p in range(num_inds):
+            for q in range(num_inds):
+                p_objs = pop_objs[p]
+                q_objs = pop_objs[q]
 
+                less_equal = all(p_objs[i] <= q_objs[i] for i in range(len(p_objs)))
+                strictly_less = any(p_objs[i] < q_objs[i] for i in range(len(p_objs)))
 
-        if not dominated:
+                if less_equal and strictly_less:
+                    dominated_indices[p].append(q)
+                elif all(q_objs[i] <= p_objs[i] for i in range(len(p_objs))) and any(q_objs[i] < p_objs[i] for i in range(len(p_objs))):
+                    domination_counts[p] += 1
 
-            pareto_indices.append(
-                i
-            )
+            if domination_counts[p] == 0:
+                fronts[0].append(p)
 
+        i = 0
+        while len(fronts[i]) > 0:
+            next_front = []
+            for p in fronts[i]:
+                for q in dominated_indices[p]:
+                    domination_counts[q] -= 1
+                    if domination_counts[q] == 0:
+                        next_front.append(q)
+            i += 1
+            fronts.append(next_front)
 
-    return dataframe.iloc[
-        pareto_indices
-    ].copy()
+        return [f for f in fronts if len(f) > 0]
 
+    def compute_crowding_distance(self, front, pop_objs):
+        distances = {idx: 0.0 for idx in front}
+        num_objs = len(pop_objs[0])
+        l = len(front)
+        if l <= 2:
+            for idx in front:
+                distances[idx] = float("inf")
+            return distances
 
-# 11. CALCULATE PARETO FRONT
-# ============================================================
+        for m in range(num_objs):
+            sorted_front = sorted(front, key=lambda idx: pop_objs[idx][m])
+            distances[sorted_front[0]] = float("inf")
+            distances[sorted_front[-1]] = float("inf")
 
-print("=" * 60)
-print("CALCULATING PARETO FRONT")
-print("=" * 60)
+            obj_min = pop_objs[sorted_front[0]][m]
+            obj_max = pop_objs[sorted_front[-1]][m]
+            norm = (obj_max - obj_min) if (obj_max - obj_min) > 1e-8 else 1.0
 
+            for i in range(1, l - 1):
+                prev_val = pop_objs[sorted_front[i - 1]][m]
+                next_val = pop_objs[sorted_front[i + 1]][m]
+                distances[sorted_front[i]] += (next_val - prev_val) / norm
 
-pareto_front = find_pareto_front(
-    strength_results
-)
+        return distances
 
-
-pareto_front = (
-    pareto_front
-    .sort_values(
-        "fairness_strength"
-    )
-    .reset_index(
-        drop=True
-    )
-)
-
-
-print(
-    "Pareto-optimal solutions:",
-    len(pareto_front)
-)
-
-print()
-
-
-print(
-    pareto_front[
-        [
-            "fairness_strength",
-            "ndcg_at_10",
-            "average_DI",
-            "gender_di",
-            "age_group_di",
-            "location_di"
+    def run(self):
+        print(f"Initializing genuine NSGA-II (Pop Size={self.pop_size}, Gens={self.generations})...")
+        
+        population = [
+            self.rng.uniform([0.0, 0.0, 0.0, 0.5], [1.0, 1.0, 1.0, 1.5]).tolist()
+            for _ in range(self.pop_size)
         ]
-    ].to_string(
-        index=False
+        population[0] = [0.0, 0.5, 0.5, 1.0]
+        population[1] = [0.5, 0.5, 0.5, 1.0]
+        population[2] = [1.0, 0.5, 0.5, 1.0]
+
+        eval_cache = {}
+        all_evaluated_solutions = []
+
+        for gen in range(self.generations):
+            pop_objs = []
+            pop_metrics = []
+
+            for ind in population:
+                ind_key = tuple(np.round(ind, 4))
+                if ind_key not in eval_cache:
+                    objs, mets = self.evaluate_individual(ind)
+                    eval_cache[ind_key] = (objs, mets)
+                else:
+                    objs, mets = eval_cache[ind_key]
+                pop_objs.append(objs)
+                pop_metrics.append(mets)
+
+                all_evaluated_solutions.append({
+                    "generation": gen + 1,
+                    "fairness_strength": ind[0],
+                    "exp_weight": ind[1],
+                    "int_weight": ind[2],
+                    "trade_param": ind[3],
+                    **mets
+                })
+
+            fronts = self.fast_non_dominated_sort(pop_objs)
+
+            offspring = []
+            while len(offspring) < self.pop_size:
+                p1_idx = self.rng.choice(len(population))
+                p2_idx = self.rng.choice(len(population))
+                parent1 = population[p1_idx]
+                parent2 = population[p2_idx]
+
+                if self.rng.random() < self.crossover_prob:
+                    c1, c2 = [], []
+                    for k in range(len(parent1)):
+                        if self.rng.random() <= 0.5:
+                            beta = (2.0 * self.rng.random()) ** (1.0 / 3.0)
+                        else:
+                            beta = (1.0 / (2.0 * (1.0 - self.rng.random()))) ** (1.0 / 3.0)
+                        val1 = 0.5 * ((1 + beta) * parent1[k] + (1 - beta) * parent2[k])
+                        val2 = 0.5 * ((1 - beta) * parent1[k] + (1 + beta) * parent2[k])
+                        c1.append(float(np.clip(val1, 0.0, 1.0)))
+                        c2.append(float(np.clip(val2, 0.0, 1.0)))
+                else:
+                    c1, c2 = list(parent1), list(parent2)
+
+                for child in [c1, c2]:
+                    if self.rng.random() < self.mutation_prob:
+                        m_idx = self.rng.choice(len(child))
+                        delta = self.rng.normal(0, 0.1)
+                        child[m_idx] = float(np.clip(child[m_idx] + delta, 0.0, 1.0))
+                    if len(offspring) < self.pop_size:
+                        offspring.append(child)
+
+            combined_pop = population + offspring
+            combined_objs = []
+            for ind in combined_pop:
+                ind_key = tuple(np.round(ind, 4))
+                if ind_key not in eval_cache:
+                    objs, mets = self.evaluate_individual(ind)
+                    eval_cache[ind_key] = (objs, mets)
+                else:
+                    objs, mets = eval_cache[ind_key]
+                combined_objs.append(objs)
+
+            combined_fronts = self.fast_non_dominated_sort(combined_objs)
+            new_pop = []
+            for front in combined_fronts:
+                if len(new_pop) + len(front) <= self.pop_size:
+                    new_pop.extend([combined_pop[idx] for idx in front])
+                else:
+                    distances = self.compute_crowding_distance(front, combined_objs)
+                    sorted_front = sorted(front, key=lambda idx: distances[idx], reverse=True)
+                    needed = self.pop_size - len(new_pop)
+                    new_pop.extend([combined_pop[idx] for idx in sorted_front[:needed]])
+                    break
+            population = new_pop
+
+        final_objs = [eval_cache[tuple(np.round(ind, 4))][0] for ind in population]
+        final_fronts = self.fast_non_dominated_sort(final_objs)
+        pareto_indices = final_fronts[0]
+
+        pareto_solutions = []
+        for idx in pareto_indices:
+            ind = population[idx]
+            objs, mets = eval_cache[tuple(np.round(ind, 4))]
+            pareto_solutions.append({
+                "fairness_strength": ind[0],
+                "exp_weight": ind[1],
+                "int_weight": ind[2],
+                "trade_param": ind[3],
+                **mets
+            })
+
+        all_df = pd.DataFrame(all_evaluated_solutions).drop_duplicates(subset=["fairness_strength", "ndcg_at_10", "fairness_gap"])
+        pareto_df = pd.DataFrame(pareto_solutions).drop_duplicates().sort_values("ndcg_at_10", ascending=False)
+        return all_df, pareto_df
+
+def run_nsga2_optimization():
+    print("=" * 60)
+    print("GENUINE NSGA-II MULTI-OBJECTIVE FAIRNESS OPTIMIZATION")
+    print("=" * 60)
+
+    test_split_path = RESULTS_DIR / "test_split.csv"
+    X_test_path = RESULTS_DIR / "X_test.csv"
+    model_path = MODELS_DIR / "xgboost_baseline.pkl"
+
+    test_df = pd.read_csv(test_split_path)
+    X_test = pd.read_csv(X_test_path)
+    model = joblib.load(model_path)
+
+    test_df["baseline_score"] = model.predict_proba(X_test)[:, 1]
+    test_df = test_df.sort_values(["user_id", "baseline_score"], ascending=[True, False]).copy()
+    test_df["baseline_rank"] = test_df.groupby("user_id").cumcount() + 1
+    test_df["rank"] = test_df["baseline_rank"]
+
+    optimizer = NSGA2Optimizer(test_df, pop_size=25, generations=12, seed=RANDOM_SEED)
+    all_df, pareto_df = optimizer.run()
+
+    min_ndcg, max_ndcg = all_df["ndcg_at_10"].min(), all_df["ndcg_at_10"].max()
+    all_df["ndcg_normalized"] = (
+        (all_df["ndcg_at_10"] - min_ndcg) / (max_ndcg - min_ndcg)
+        if max_ndcg > min_ndcg else 1.0
     )
-)
-
-print()
-
-
-# 12. MARK PARETO SOLUTIONS
-# ============================================================
-
-strength_results[
-    "pareto_optimal"
-] = False
-
-
-for index in pareto_front.index:
-
-    strength = pareto_front.loc[
-        index,
-        "fairness_strength"
-    ]
-
-
-    mask = (
-        strength_results[
-            "fairness_strength"
-        ]
-        == strength
+    pareto_df["ndcg_normalized"] = (
+        (pareto_df["ndcg_at_10"] - min_ndcg) / (max_ndcg - min_ndcg)
+        if max_ndcg > min_ndcg else 1.0
     )
 
-
-    strength_results.loc[
-        mask,
-        "pareto_optimal"
-    ] = True
-
-
-# 13. NORMALIZE OBJECTIVES
-# ============================================================
-
-print("=" * 60)
-print("CALCULATING BALANCED SOLUTION")
-print("=" * 60)
-
-
-# Quality normalization
-# ------------------------------------------------------------
-
-quality_min = (
-    pareto_front[
-        "ndcg_at_10"
-    ].min()
-)
-
-
-quality_max = (
-    pareto_front[
-        "ndcg_at_10"
-    ].max()
-)
-
-
-if quality_max != quality_min:
-
-    pareto_front[
-        "quality_normalized"
-    ] = (
-
-        (
-            pareto_front[
-                "ndcg_at_10"
-            ]
-            - quality_min
-        )
-
-        /
-
-        (
-            quality_max
-            - quality_min
-        )
-    )
-
-else:
-
-    pareto_front[
-        "quality_normalized"
-    ] = 1.0
-
-
-# Fairness normalization
-# ------------------------------------------------------------
-
-fairness_min = (
-    pareto_front[
-        "average_DI"
-    ].min()
-)
-
-
-fairness_max = (
-    pareto_front[
-        "average_DI"
-    ].max()
-)
-
-
-if fairness_max != fairness_min:
-
-    pareto_front[
-        "fairness_normalized"
-    ] = (
-
-        (
-            pareto_front[
-                "average_DI"
-            ]
-            - fairness_min
-        )
-
-        /
-
-        (
-            fairness_max
-            - fairness_min
-        )
-    )
-
-else:
-
-    pareto_front[
-        "fairness_normalized"
-    ] = 1.0
-
-
-# 14. BALANCED PARETO SCORE
-# ============================================================
-
-pareto_front[
-    "balanced_score"
-] = (
-
-    0.5
-    * pareto_front[
-        "quality_normalized"
-    ]
-
-    +
-
-    0.5
-    * pareto_front[
-        "fairness_normalized"
-    ]
-)
-
-
-best_index = (
-    pareto_front[
-        "balanced_score"
-    ]
-    .idxmax()
-)
-
-
-best_solution = (
-    pareto_front.loc[
-        best_index
-    ]
-)
-
-
-print(
-    "Selected Pareto solution:"
-)
-
-print(
-    "Fairness strength:",
-    best_solution[
-        "fairness_strength"
-    ]
-)
-
-print(
-    "NDCG@10:",
-    round(
-        best_solution[
-            "ndcg_at_10"
-        ],
-        4
-    )
-)
-
-print(
-    "Average DI:",
-    round(
-        best_solution[
-            "average_DI"
-        ],
-        4
-    )
-)
-
-print(
-    "Gender DI:",
-    round(
-        best_solution[
-            "gender_di"
-        ],
-        4
-    )
-)
-
-print(
-    "Age-group DI:",
-    round(
-        best_solution[
-            "age_group_di"
-        ],
-        4
-    )
-)
-
-print(
-    "Location DI:",
-    round(
-        best_solution[
-            "location_di"
-        ],
-        4
-    )
-)
-
-print(
-    "Balanced Pareto score:",
-    round(
-        best_solution[
-            "balanced_score"
-        ],
-        4
-    )
-)
-
-print()
-
-
-# 15. SAVE PARETO RESULTS
-# ============================================================
-
-print("=" * 60)
-print("SAVING NSGA-II RESULTS")
-print("=" * 60)
-
-
-all_results_path = (
-    RESULTS_PATH
-    / "nsga2_all_solutions.csv"
-)
-
-
-pareto_path = (
-    RESULTS_PATH
-    / "nsga2_pareto_front.csv"
-)
-
-
-selected_path = (
-    RESULTS_PATH
-    / "nsga2_selected_solution.csv"
-)
-
-
-strength_results.to_csv(
-    all_results_path,
-    index=False
-)
-
-
-pareto_front.to_csv(
-    pareto_path,
-    index=False
-)
-
-
-pd.DataFrame(
-    [
-        best_solution
-    ]
-).to_csv(
-    selected_path,
-    index=False
-)
-
-
-print(
-    "1. nsga2_all_solutions.csv"
-)
-
-print(
-    "2. nsga2_pareto_front.csv"
-)
-
-print(
-    "3. nsga2_selected_solution.csv"
-)
-
-print()
-
-
-
-# 16. CREATE PARETO FRONT PLOT
-# ============================================================
-
-print("=" * 60)
-print("CREATING PARETO FRONT PLOT")
-print("=" * 60)
-
-
-plt.figure(
-    figsize=(10, 6)
-)
-
-
-plt.scatter(
-    strength_results[
-        "average_DI"
-    ],
-    strength_results[
-        "ndcg_at_10"
-    ],
-    label="Candidate solutions"
-)
-
-
-plt.scatter(
-    pareto_front[
-        "average_DI"
-    ],
-    pareto_front[
-        "ndcg_at_10"
-    ],
-    marker="o",
-    label="Pareto front"
-)
-
-
-plt.scatter(
-    best_solution[
-        "average_DI"
-    ],
-    best_solution[
-        "ndcg_at_10"
-    ],
-    marker="*",
-    s=200,
-    label="Selected solution"
-)
-
-
-plt.xlabel(
-    "Average Disparate Impact"
-)
-
-plt.ylabel(
-    "NDCG@10"
-)
-
-plt.title(
-    "NSGA-II Fairness–Quality Pareto Front"
-)
-
-plt.grid(
-    True,
-    alpha=0.3
-)
-
-plt.legend()
-
-plt.tight_layout()
-
-
-plot_path = (
-    RESULTS_PATH
-    / "nsga2_pareto_front.png"
-)
-
-
-plt.savefig(
-    plot_path,
-    dpi=300,
-    bbox_inches="tight"
-)
-
-plt.close()
-
-
-print(
-    "Saved:"
-)
-
-print(
-    plot_path
-)
-
-print()
-
-
-print("=" * 60)
-print("NSGA-II OPTIMIZATION COMPLETED")
-print("=" * 60)
-
-print()
-
-print(
-    "Pareto-optimal solutions:",
-    len(pareto_front)
-)
-
-print(
-    "Selected fairness strength:",
-    best_solution[
-        "fairness_strength"
-    ]
-)
-
-print(
-    "Selected NDCG@10:",
-    round(
-        best_solution[
-            "ndcg_at_10"
-        ],
-        4
-    )
-)
-
-print(
-    "Selected average DI:",
-    round(
-        best_solution[
-            "average_DI"
-        ],
-        4
-    )
-)
-
-print()
-
-print(
-    "Generated files:"
-)
-
-print(
-    "1. nsga2_all_solutions.csv"
-)
-
-print(
-    "2. nsga2_pareto_front.csv"
-)
-
-print(
-    "3. nsga2_selected_solution.csv"
-)
-
-print(
-    "4. nsga2_pareto_front.png"
-)
-
-print()
-
-print(
-    "Results folder:"
-)
-
-print(
-    RESULTS_PATH
-)
+    pareto_df["score_balanced_50_50"] = 0.50 * pareto_df["ndcg_normalized"] + 0.50 * (1.0 - pareto_df["fairness_gap"])
+    pareto_df["score_fairness_25_75"] = 0.25 * pareto_df["ndcg_normalized"] + 0.75 * (1.0 - pareto_df["fairness_gap"])
+    pareto_df["score_quality_75_25"] = 0.75 * pareto_df["ndcg_normalized"] + 0.25 * (1.0 - pareto_df["fairness_gap"])
+    pareto_df["balanced_score"] = pareto_df["score_balanced_50_50"]
+    all_df["balanced_score"] = 0.50 * all_df["ndcg_normalized"] + 0.50 * (1.0 - all_df["fairness_gap"])
+
+    selected_balanced = pareto_df.sort_values("score_balanced_50_50", ascending=False).iloc[[0]].copy()
+
+    all_df.to_csv(RESULTS_DIR / "nsga2_all_solutions.csv", index=False)
+    pareto_df.to_csv(RESULTS_DIR / "nsga2_pareto_front.csv", index=False)
+    selected_balanced.to_csv(RESULTS_DIR / "nsga2_selected_solution.csv", index=False)
+
+    print(f"\nSaved NSGA-II candidate solutions ({len(all_df)}) and Pareto front ({len(pareto_df)}).")
+    print("\nSelected Balanced Pareto Solution (50/50 Quality/Fairness):")
+    print(selected_balanced[["fairness_strength", "ndcg_at_10", "average_exposure_di", "fairness_gap", "worst_intersectional_di"]].to_string(index=False))
+
+    plt.figure(figsize=(9, 6))
+    plt.scatter(all_df["fairness_gap"], all_df["ndcg_at_10"], color="#94A3B8", alpha=0.5, label="Explored Solutions", s=30)
+    plt.plot(pareto_df.sort_values("fairness_gap")["fairness_gap"], pareto_df.sort_values("fairness_gap")["ndcg_at_10"], color="#2563EB", linewidth=2.5, label="NSGA-II Pareto Front")
+    plt.scatter(pareto_df["fairness_gap"], pareto_df["ndcg_at_10"], color="#1D4ED8", s=60, edgecolors="black", label="Pareto-Optimal Points")
+
+    baseline_pt = all_df[all_df["fairness_strength"] == 0.0].iloc[0] if len(all_df[all_df["fairness_strength"] == 0.0]) > 0 else None
+    if baseline_pt is not None:
+        plt.scatter(baseline_pt["fairness_gap"], baseline_pt["ndcg_at_10"], color="#DC2626", s=130, marker="X", edgecolors="black", label="Baseline (No Mitigation)", zorder=5)
+
+    plt.scatter(selected_balanced["fairness_gap"], selected_balanced["ndcg_at_10"], color="#10B981", s=150, marker="*", edgecolors="black", label="Selected Balanced (50/50)", zorder=6)
+
+    plt.title("NSGA-II Multi-Objective Pareto Front: NDCG@10 vs. Fairness Gap", fontsize=13, pad=15)
+    plt.xlabel("Fairness Gap ($|1.0 - \overline{\mathrm{Exposure\ DI}}|$)", fontsize=12)
+    plt.ylabel("Recommendation Quality (NDCG@10)", fontsize=12)
+    plt.grid(True, linestyle="--", alpha=0.6)
+    plt.legend(loc="lower left", fontsize=10)
+    plt.tight_layout()
+    plt.savefig(RESULTS_DIR / "nsga2_pareto_front.png", dpi=300)
+    plt.close()
+    print("Pareto front plot saved to: results/nsga2_pareto_front.png\n")
+
+if __name__ == "__main__":
+    run_nsga2_optimization()

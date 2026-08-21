@@ -1,740 +1,181 @@
 import joblib
 import pandas as pd
 import numpy as np
-
 from pathlib import Path
-
 from sklearn.metrics import ndcg_score
 
-
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-DATA_PATH = (
-    BASE_DIR
-    / "data"
-    / "synthetic_linkedin_dataset_30000.csv"
+from src.config import (
+    RESULTS_DIR,
+    MODELS_DIR,
+    DEFAULT_K
 )
 
-MODEL_PATH = (
-    BASE_DIR
-    / "models"
-    / "xgboost_baseline.pkl"
-)
-
-ENCODER_PATH = (
-    BASE_DIR
-    / "results"
-    / "categorical_encoder.pkl"
-)
-
-RESULTS_PATH = BASE_DIR / "results"
-
-
-# 2. SETTINGS
-# ============================================================
-
-K = 10
-
-
-# 3. REQUIRED COLUMNS
-# ============================================================
-
-CATEGORICAL_FEATURES = [
-    "professional_field",
-    "education",
-    "post_topic",
-    "content_type"
-]
-
-NUMERICAL_FEATURES = [
-    "experience_years",
-    "network_size",
-    "previous_interactions",
-    "engagement",
-    "author_user_similarity",
-    "topic_similarity",
-    "post_age_hours",
-    "author_experience",
-    "author_network_size",
-    "network_distance"
-]
-
-MODEL_FEATURES = (
-    CATEGORICAL_FEATURES
-    + NUMERICAL_FEATURES
-)
-
-
-# 4. CHECK REQUIRED FILES
-# ============================================================
-
-print("=" * 60)
-print("CHECKING REQUIRED FILES")
-print("=" * 60)
-
-required_files = [
-    DATA_PATH,
-    MODEL_PATH,
-    ENCODER_PATH
-]
-
-for file_path in required_files:
-
-    if not file_path.exists():
-
-        raise FileNotFoundError(
-            f"Required file not found:\n{file_path}"
-        )
-
-    print("✓", file_path)
-
-print()
-
-
-# 5. LOAD DATASET
-# ============================================================
-
-print("=" * 60)
-print("LOADING ORIGINAL DATASET")
-print("=" * 60)
-
-df = pd.read_csv(DATA_PATH)
-
-print("Dataset shape:", df.shape)
-print()
-
-
-# 6. LOAD MODEL
-# ============================================================
-
-print("=" * 60)
-print("XGBOOST MODEL LOADED")
-print("=" * 60)
-
-model = joblib.load(MODEL_PATH)
-
-print(MODEL_PATH)
-print()
-
-
-# 7. LOAD ENCODER
-# ============================================================
-
-print("=" * 60)
-print("ENCODER LOADED")
-print("=" * 60)
-
-encoder = joblib.load(ENCODER_PATH)
-
-print(ENCODER_PATH)
-print()
-
-
-# ============================================================
-# 8. PREPARE FEATURES
-# ============================================================
-
-print("=" * 60)
-print("PREPARING FEATURES")
-print("=" * 60)
-
-X = df[MODEL_FEATURES].copy()
-
-
-# Encode categorical features
-X_cat = encoder.transform(
-    X[CATEGORICAL_FEATURES]
-)
-
-encoded_feature_names = (
-    encoder.get_feature_names_out(
-        CATEGORICAL_FEATURES
-    )
-)
-
-
-X_cat = pd.DataFrame(
-    X_cat,
-    columns=encoded_feature_names,
-    index=X.index
-)
-
-
-# Numerical features
-X_num = X[
-    NUMERICAL_FEATURES
-].copy()
-
-
-# Combine
-X_processed = pd.concat(
-    [
-        X_num.reset_index(drop=True),
-        X_cat.reset_index(drop=True)
-    ],
-    axis=1
-)
-
-
-print(
-    "Processed feature shape:",
-    X_processed.shape
-)
-
-print()
-
-
-# 9. GENERATE RECOMMENDATION SCORES
-# ============================================================
-
-print("=" * 60)
-print("GENERATING RECOMMENDATION SCORES")
-print("=" * 60)
-
-scores = model.predict_proba(
-    X_processed
-)[:, 1]
-
-
-df["recommendation_score"] = scores
-
-
-print("Scores generated successfully.")
-
-print(
-    f"Score range: "
-    f"{scores.min():.3f} "
-    f"to "
-    f"{scores.max():.4f}"
-)
-
-print()
-
-
-# 10. CREATE USER-LEVEL RANKINGS
-# ============================================================
-
-print("=" * 60)
-print("CREATING USER-LEVEL RANKINGS")
-print("=" * 60)
-
-
-df = df.sort_values(
-    [
-        "user_id",
-        "recommendation_score"
-    ],
-    ascending=[
-        True,
-        False
-    ]
-)
-
-
-df["rank"] = (
-    df.groupby("user_id")
-      .cumcount()
-      + 1
-)
-
-
-print("User-level rankings created.")
-print()
-
-
-# 11. TOP-K RECOMMENDATIONS
-# ============================================================
-
-print("=" * 60)
-print("TOP-K RECOMMENDATIONS")
-print("=" * 60)
-
-top_k = df[
-    df["rank"] <= K
-].copy()
-
-
-print(
-    "Number of users:",
-    df["user_id"].nunique()
-)
-
-print(
-    "K:",
-    K
-)
-
-print(
-    "Top-K rows:",
-    len(top_k)
-)
-
-print()
-
-# 12. SAMPLE USER
-# ============================================================
-
-print("=" * 60)
-print("SAMPLE USER RECOMMENDATIONS")
-print("=" * 60)
-
-
-sample_user = (
-    df["user_id"]
-    .value_counts()
-    .index[0]
-)
-
-
-sample_recommendations = top_k[
-    top_k["user_id"] == sample_user
-][
-    [
-        "user_id",
-        "post_id",
-        "recommendation_score",
-        "interaction",
-        "rank"
-    ]
-]
-
-
-print(
-    "User:",
-    sample_user
-)
-
-print()
-
-print(
-    sample_recommendations.to_string(
-        index=False
-    )
-)
-
-print()
-
-
-# 13. METRIC FUNCTIONS
-# ============================================================
-
-def precision_at_k(
-    actual,
-    k
-):
-
-    actual = np.asarray(
-        actual
-    )
-
-    k = min(
-        k,
-        len(actual)
-    )
-
-    if k == 0:
+def precision_at_k(actual, k):
+    actual = np.asarray(actual)
+    if len(actual) == 0 or k == 0:
         return 0.0
+    k_eff = min(k, len(actual))
+    return float(actual[:k_eff].sum() / k)
 
-    return (
-        actual[:k].sum()
-        / k
-    )
-
-
-def recall_at_k(
-    actual,
-    k
-):
-
-    actual = np.asarray(
-        actual
-    )
-
+def recall_at_k(actual, k):
+    actual = np.asarray(actual)
     total_relevant = actual.sum()
-
     if total_relevant == 0:
         return np.nan
+    k_eff = min(k, len(actual))
+    return float(actual[:k_eff].sum() / total_relevant)
 
-    k = min(
-        k,
-        len(actual)
-    )
-
-    return (
-        actual[:k].sum()
-        / total_relevant
-    )
-
-
-def ndcg_at_k(
-    actual,
-    scores,
-    k
-):
-
-    actual = np.asarray(
-        actual
-    )
-
-    scores = np.asarray(
-        scores
-    )
-
-    # NDCG requires at least two candidate documents.
-    if len(actual) < 2:
+def compute_ndcg_at_k(actual, scores, k):
+    actual = np.asarray(actual)
+    scores = np.asarray(scores)
+    if len(actual) < 2 or actual.sum() == 0:
         return np.nan
+    k_eff = min(k, len(actual))
+    return float(ndcg_score([actual], [scores], k=k_eff))
 
-    k = min(
-        k,
-        len(actual)
-    )
+def evaluate_user_recommendations(df, score_column="recommendation_score"):
+    """
+    Evaluates complete candidate pools per user without premature truncation.
+    """
+    evaluation_results = []
+    
+    for user_id, group in df.groupby("user_id"):
+        # Sort complete candidate pool by score descending
+        sorted_group = group.sort_values(score_column, ascending=False)
+        actual = sorted_group["interaction"].to_numpy()
+        scores = sorted_group[score_column].to_numpy()
+        cand_count = len(actual)
+        rel_count = int(actual.sum())
 
-    return ndcg_score(
-        [actual],
-        [scores],
-        k=k
-    )
+        p5 = precision_at_k(actual, 5)
+        p10 = precision_at_k(actual, 10)
+        r5 = recall_at_k(actual, 5)
+        r10 = recall_at_k(actual, 10)
+        ndcg5 = compute_ndcg_at_k(actual, scores, 5)
+        ndcg10 = compute_ndcg_at_k(actual, scores, 10)
 
+        evaluation_results.append({
+            "user_id": user_id,
+            "candidate_count": cand_count,
+            "relevant_count": rel_count,
+            "precision_at_5": p5,
+            "precision_at_10": p10,
+            "recall_at_5": r5,
+            "recall_at_10": r10,
+            "ndcg_at_5": ndcg5,
+            "ndcg_at_10": ndcg10
+        })
 
-# 14. USER-LEVEL EVALUATION
-# ============================================================
+    user_eval_df = pd.DataFrame(evaluation_results)
+    return user_eval_df
 
-print("=" * 60)
-print("CALCULATING TOP-K METRICS")
-print("=" * 60)
+def run_top_k_recommendation():
+    print("=" * 60)
+    print("TOP-K RECOMMENDATION & FULL CANDIDATE POOL EVALUATION")
+    print("=" * 60)
 
+    model_path = MODELS_DIR / "xgboost_baseline.pkl"
+    test_split_path = RESULTS_DIR / "test_split.csv"
+    X_test_path = RESULTS_DIR / "X_test.csv"
 
-evaluation_results = []
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model not found: {model_path}")
+    if not test_split_path.exists():
+        raise FileNotFoundError(f"Test split not found: {test_split_path}")
 
-ndcg_skipped = 0
+    model = joblib.load(model_path)
+    test_df = pd.read_csv(test_split_path)
+    X_test = pd.read_csv(X_test_path)
 
+    # Generate baseline recommendation scores on held-out test data
+    scores = model.predict_proba(X_test)[:, 1]
+    test_df["recommendation_score"] = scores
 
-for user_id, group in df.groupby(
-    "user_id"
-):
+    # Rank complete candidate pool per user
+    test_df = test_df.sort_values(["user_id", "recommendation_score"], ascending=[True, False]).copy()
+    test_df["rank"] = test_df.groupby("user_id").cumcount() + 1
 
-    # Sort by recommendation score
-    group = group.sort_values(
-        "recommendation_score",
-        ascending=False
-    )
+    # Extract Top-10 recommendations
+    top_10 = test_df[test_df["rank"] <= DEFAULT_K].copy()
 
+    # User-level full candidate pool evaluation
+    user_eval = evaluate_user_recommendations(test_df, "recommendation_score")
 
-    actual = group[
-        "interaction"
-    ].to_numpy()
+    # Aggregate Metrics (ignoring NaN for recall/NDCG when relevant=0)
+    p5 = user_eval["precision_at_5"].mean()
+    p10 = user_eval["precision_at_10"].mean()
+    r5 = user_eval["recall_at_5"].dropna().mean()
+    r10 = user_eval["recall_at_10"].dropna().mean()
+    ndcg5 = user_eval["ndcg_at_5"].dropna().mean()
+    ndcg10 = user_eval["ndcg_at_10"].dropna().mean()
 
+    # Candidate pool statistics
+    cand_counts = user_eval["candidate_count"]
+    min_cand = int(cand_counts.min())
+    max_cand = int(cand_counts.max())
+    mean_cand = float(cand_counts.mean())
+    median_cand = float(cand_counts.median())
+    pct_fewer_than_k = float((cand_counts < DEFAULT_K).mean() * 100)
+    pct_at_least_k = float((cand_counts >= DEFAULT_K).mean() * 100)
 
-    scores_user = group[
-        "recommendation_score"
-    ].to_numpy()
+    print("\n" + "=" * 60)
+    print("TOP-K RECOMMENDATION METRICS (HELD-OUT TEST SET)")
+    print("=" * 60)
+    print(f"Users evaluated           : {len(user_eval):,}")
+    print(f"Total test candidate items: {len(test_df):,}")
+    print(f"Candidate count (Min/Max) : {min_cand} / {max_cand}")
+    print(f"Candidate count (Mean/Med): {mean_cand:.2f} / {median_cand:.1f}")
+    print(f"Users with < 10 candidates: {pct_fewer_than_k:.1f}%")
+    print(f"Users with >= 10 cand.    : {pct_at_least_k:.1f}%")
+    print(f"Precision@5               : {p5:.4f}")
+    print(f"Precision@10              : {p10:.4f}")
+    print(f"Recall@5                  : {r5:.4f}")
+    print(f"Recall@10                 : {r10:.4f}")
+    print(f"NDCG@5                    : {ndcg5:.4f}")
+    print(f"NDCG@10                   : {ndcg10:.4f}\n")
 
+    # Save Outputs
+    recommendation_cols = [
+        "user_id", "post_id", "author_id", "recommendation_score",
+        "interaction", "rank", "gender", "age_group", "location"
+    ]
+    top_10[recommendation_cols].to_csv(RESULTS_DIR / "top_10_recommendations.csv", index=False)
+    user_eval.to_csv(RESULTS_DIR / "top_k_user_evaluation.csv", index=False)
 
-    precision_5 = precision_at_k(
-        actual,
-        5
-    )
-
-
-    precision_10 = precision_at_k(
-        actual,
-        10
-    )
-
-
-    recall_5 = recall_at_k(
-        actual,
-        5
-    )
-
-
-    # Recall@10 is mathematically 1.0 whenever
-    # all candidate documents are included.
-    #
-    # We therefore DO NOT report Recall@10
-    # as a recommendation-quality metric.
-
-
-    ndcg_5 = ndcg_at_k(
-        actual,
-        scores_user,
-        5
-    )
-
-
-    ndcg_10 = ndcg_at_k(
-        actual,
-        scores_user,
-        10
-    )
-
-
-    if np.isnan(ndcg_5) or np.isnan(ndcg_10):
-
-        ndcg_skipped += 1
-
-
-    evaluation_results.append({
-
-        "user_id": user_id,
-
-        "candidate_count": len(
-            group
-        ),
-
-        "relevant_count": int(
-            actual.sum()
-        ),
-
-        "precision_at_5": precision_5,
-
-        "precision_at_10": precision_10,
-
-        "recall_at_5": recall_5,
-
-        "ndcg_at_5": ndcg_5,
-
-        "ndcg_at_10": ndcg_10
+    metrics_df = pd.DataFrame({
+        "metric": [
+            "Precision@5", "Precision@10", "Recall@5", "Recall@10", "NDCG@5", "NDCG@10"
+        ],
+        "value": [p5, p10, r5, r10, ndcg5, ndcg10]
     })
-
-
-user_evaluation = pd.DataFrame(
-    evaluation_results
-)
-
-
-# 15. AGGREGATE METRICS
-# ============================================================
-
-precision_5 = (
-    user_evaluation[
-        "precision_at_5"
-    ].mean()
-)
-
-
-precision_10 = (
-    user_evaluation[
-        "precision_at_10"
-    ].mean()
-)
-
-
-recall_5 = (
-    user_evaluation[
-        "recall_at_5"
-    ].mean()
-)
-
-
-ndcg_5 = (
-    user_evaluation[
-        "ndcg_at_5"
-    ].mean()
-)
-
-
-ndcg_10 = (
-    user_evaluation[
-        "ndcg_at_10"
-    ].mean()
-)
-
-
-# 16. FINAL TOP-K METRICS
-# ============================================================
-
-print("=" * 60)
-print("TOP-K RECOMMENDATION RESULTS")
-print("=" * 60)
-
-print(
-    f"Precision@5  : {precision_5:.4f}"
-)
-
-print(
-    f"Precision@10 : {precision_10:.4f}"
-)
-
-print(
-    f"Recall@5     : {recall_5:.4f}"
-)
-
-print(
-    f"NDCG@5       : {ndcg_5:.4f}"
-)
-
-print(
-    f"NDCG@10      : {ndcg_10:.4f}"
-)
-
-print()
-
-print(
-    "Recall@10 was excluded because "
-    "each user has exactly 10 candidate records."
-)
-
-print(
-    "Therefore Top-10 contains the entire "
-    "candidate set and Recall@10 would always be 1.0."
-)
-
-print()
-
-
-
-# 17. SAVE TOP-K RECOMMENDATIONS
-# ============================================================
-
-recommendation_columns = [
-    "user_id",
-    "post_id",
-    "recommendation_score",
-    "interaction",
-    "rank"
-]
-
-
-top_k[
-    recommendation_columns
-].to_csv(
-    RESULTS_PATH
-    / "top_10_recommendations.csv",
-    index=False
-)
-
-
-
-# 18. SAVE USER-LEVEL EVALUATION
-# ============================================================
-
-user_evaluation.to_csv(
-    RESULTS_PATH
-    / "top_k_user_evaluation.csv",
-    index=False
-)
-
-
-
-# 19. SAVE METRICS
-# ============================================================
-
-metrics = pd.DataFrame({
-
-    "metric": [
-
-        "Precision@5",
-
-        "Precision@10",
-
-        "Recall@5",
-
-        "NDCG@5",
-
-        "NDCG@10"
-    ],
-
-    "value": [
-
-        precision_5,
-
-        precision_10,
-
-        recall_5,
-
-        ndcg_5,
-
-        ndcg_10
-    ]
-})
-
-
-metrics.to_csv(
-    RESULTS_PATH
-    / "top_k_metrics.csv",
-    index=False
-)
-
-
-
-# 20. SAVE EVALUATION NOTES
-# ============================================================
-
-evaluation_notes = pd.DataFrame({
-
-    "item": [
-
-        "Number of users",
-
-        "Total interaction records",
-
-        "Candidates per user",
-
-        "Top-K",
-
-        "Recall@10 status"
-    ],
-
-    "value": [
-
-        df["user_id"].nunique(),
-
-        len(df),
-
-        df.groupby(
-            "user_id"
-        ).size().mean(),
-
-        K,
-
-        "Excluded because K equals candidate count"
-    ]
-})
-
-
-evaluation_notes.to_csv(
-    RESULTS_PATH
-    / "top_k_evaluation_notes.csv",
-    index=False
-)
-
-
-
-# 21. COMPLETION
-# ============================================================
-
-print("=" * 60)
-print("TOP-K RECOMMENDER COMPLETED SUCCESSFULLY")
-print("=" * 60)
-
-print()
-
-print("Generated files:")
-
-print(
-    "1. top_10_recommendations.csv"
-)
-
-print(
-    "2. top_k_user_evaluation.csv"
-)
-
-print(
-    "3. top_k_metrics.csv"
-)
-
-print(
-    "4. top_k_evaluation_notes.csv"
-)
-
-print()
-
-print(
-    "Results folder:"
-)
-
-print(
-    RESULTS_PATH
-)
+    metrics_df.to_csv(RESULTS_DIR / "top_k_metrics.csv", index=False)
+
+    notes_df = pd.DataFrame({
+        "item": [
+            "Number of test users",
+            "Total test interaction records",
+            "Min candidate count",
+            "Max candidate count",
+            "Mean candidate count",
+            "Median candidate count",
+            "Percentage users with < 10 candidates",
+            "Percentage users with >= 10 candidates",
+            "Evaluation methodology"
+        ],
+        "value": [
+            len(user_eval),
+            len(test_df),
+            min_cand,
+            max_cand,
+            f"{mean_cand:.2f}",
+            f"{median_cand:.1f}",
+            f"{pct_fewer_than_k:.2f}%",
+            f"{pct_at_least_k:.2f}%",
+            "Full candidate pools evaluated per user on held-out test split without truncation"
+        ]
+    })
+    notes_df.to_csv(RESULTS_DIR / "top_k_evaluation_notes.csv", index=False)
+    print("Top-K recommender completed successfully.\n")
+
+if __name__ == "__main__":
+    run_top_k_recommendation()

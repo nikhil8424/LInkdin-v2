@@ -1,0 +1,10 @@
+protected_attribute,predictive_rank,feature,importance_score,attribute_ROC_AUC,proxy_risk_assessment
+gender,1,network_size,0.19906376807549198,0.5153959972827336,Low / Noise Proxy Signal
+gender,2,experience_years,0.18592235508240487,0.5153959972827336,Low / Noise Proxy Signal
+gender,3,previous_interactions,0.1228366287229709,0.5153959972827336,Low / Noise Proxy Signal
+age_group,1,network_size,0.22730648224541875,0.4620747354861384,Low / Noise Proxy Signal
+age_group,2,experience_years,0.18720563559247153,0.4620747354861384,Low / Noise Proxy Signal
+age_group,3,previous_interactions,0.14226473039469717,0.4620747354861384,Low / Noise Proxy Signal
+location,1,experience_years,0.19590007264586207,0.4964089856859444,Low / Noise Proxy Signal
+location,2,network_size,0.1913578735265381,0.4964089856859444,Low / Noise Proxy Signal
+location,3,previous_interactions,0.15975136849854818,0.4964089856859444,Low / Noise Proxy Signal

@@ -1,10 +1,7 @@
 import joblib
 import pandas as pd
-
 from pathlib import Path
-
 from xgboost import XGBClassifier
-
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
@@ -15,258 +12,89 @@ from sklearn.metrics import (
     confusion_matrix
 )
 
-from sklearn.metrics import ndcg_score
-
-
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-RESULTS_PATH = BASE_DIR / "results"
-MODELS_PATH = BASE_DIR / "models"
-
-
-X_train = pd.read_csv(
-    RESULTS_PATH / "X_train.csv"
+from src.config import (
+    RESULTS_DIR,
+    MODELS_DIR,
+    RANDOM_SEED
 )
 
-X_test = pd.read_csv(
-    RESULTS_PATH / "X_test.csv"
-)
+def train_baseline_model():
+    print("=" * 60)
+    print("TRAINING XGBOOST RECOMMENDATION MODEL")
+    print("=" * 60)
 
-y_train = pd.read_csv(
-    RESULTS_PATH / "y_train.csv"
-).squeeze()
+    X_train = pd.read_csv(RESULTS_DIR / "X_train.csv")
+    X_val = pd.read_csv(RESULTS_DIR / "X_val.csv")
+    X_test = pd.read_csv(RESULTS_DIR / "X_test.csv")
 
-y_test = pd.read_csv(
-    RESULTS_PATH / "y_test.csv"
-).squeeze()
+    y_train = pd.read_csv(RESULTS_DIR / "y_train.csv").squeeze()
+    y_val = pd.read_csv(RESULTS_DIR / "y_val.csv").squeeze()
+    y_test = pd.read_csv(RESULTS_DIR / "y_test.csv").squeeze()
 
+    print(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
+    print(f"X_val  : {X_val.shape}, y_val  : {y_val.shape}")
+    print(f"X_test : {X_test.shape}, y_test : {y_test.shape}")
 
-print("=" * 60)
-print("PROCESSED DATA LOADED")
-print("=" * 60)
-
-print("X_train:", X_train.shape)
-print("X_test :", X_test.shape)
-print("y_train:", y_train.shape)
-print("y_test :", y_test.shape)
-
-print()
-
-
-model = XGBClassifier(
-    n_estimators=200,
-    max_depth=6,
-    learning_rate=0.05,
-    subsample=0.8,
-    colsample_bytree=0.8,
-    objective="binary:logistic",
-    eval_metric="logloss",
-    random_state=42,
-    n_jobs=-1
-)
-
-
-print("=" * 60)
-print("TRAINING XGBOOST")
-print("=" * 60)
-
-model.fit(
-    X_train,
-    y_train
-)
-
-print("XGBoost training completed.")
-print()
-
-
-
-# 4. MAKE PREDICTIONS
-# ============================================================
-
-y_pred = model.predict(X_test)
-
-y_probability = model.predict_proba(
-    X_test
-)[:, 1]
-
-
-# 5. CLASSIFICATION METRICS
-# ============================================================
-
-accuracy = accuracy_score(
-    y_test,
-    y_pred
-)
-
-precision = precision_score(
-    y_test,
-    y_pred
-)
-
-recall = recall_score(
-    y_test,
-    y_pred
-)
-
-f1 = f1_score(
-    y_test,
-    y_pred
-)
-
-roc_auc = roc_auc_score(
-    y_test,
-    y_probability
-)
-
-
-# 6. NDCG
-# ============================================================
-
-
-ndcg_5 = ndcg_score(
-    [y_test.to_numpy()],
-    [y_probability],
-    k=5
-)
-
-ndcg_10 = ndcg_score(
-    [y_test.to_numpy()],
-    [y_probability],
-    k=10
-)
-
-
-# 7. DISPLAY RESULTS
-# ============================================================
-
-print("=" * 60)
-print("BASELINE MODEL RESULTS")
-print("=" * 60)
-
-print(f"Accuracy   : {accuracy:.4f}")
-print(f"Precision  : {precision:.4f}")
-print(f"Recall     : {recall:.4f}")
-print(f"F1 Score   : {f1:.4f}")
-print(f"ROC-AUC    : {roc_auc:.4f}")
-print(f"NDCG@5     : {ndcg_5:.4f}")
-print(f"NDCG@10    : {ndcg_10:.4f}")
-
-print()
-
-
-# 8. CLASSIFICATION REPORT
-# ============================================================
-
-print("=" * 60)
-print("CLASSIFICATION REPORT")
-print("=" * 60)
-
-print(
-    classification_report(
-        y_test,
-        y_pred
+    model = XGBClassifier(
+        n_estimators=200,
+        max_depth=6,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        objective="binary:logistic",
+        eval_metric="logloss",
+        random_state=RANDOM_SEED,
+        n_jobs=-1
     )
-)
 
-
-# 9. CONFUSION MATRIX
-# ============================================================
-
-print("=" * 60)
-print("CONFUSION MATRIX")
-print("=" * 60)
-
-cm = confusion_matrix(
-    y_test,
-    y_pred
-)
-
-print(cm)
-
-print()
-
-
-# 10. FEATURE IMPORTANCE
-# ============================================================
-
-feature_importance = pd.DataFrame({
-    "feature": X_train.columns,
-    "importance": model.feature_importances_
-})
-
-feature_importance = feature_importance.sort_values(
-    by="importance",
-    ascending=False
-)
-
-print("=" * 60)
-print("TOP 15 FEATURES")
-print("=" * 60)
-
-print(
-    feature_importance.head(15).to_string(
-        index=False
+    model.fit(
+        X_train,
+        y_train,
+        eval_set=[(X_val, y_val)],
+        verbose=False
     )
-)
+    print("XGBoost model training completed.")
 
-print()
+    # Evaluate on held-out test set
+    y_pred = model.predict(X_test)
+    y_proba = model.predict_proba(X_test)[:, 1]
 
+    acc = accuracy_score(y_test, y_pred)
+    prec = precision_score(y_test, y_pred, zero_division=0)
+    rec = recall_score(y_test, y_pred, zero_division=0)
+    f1 = f1_score(y_test, y_pred, zero_division=0)
+    auc = roc_auc_score(y_test, y_proba)
 
-# 11. SAVE MODEL
-# ============================================================
+    print("\n" + "=" * 60)
+    print("TEST SET CLASSIFICATION METRICS")
+    print("=" * 60)
+    print(f"Accuracy  : {acc:.4f}")
+    print(f"Precision : {prec:.4f}")
+    print(f"Recall    : {rec:.4f}")
+    print(f"F1 Score  : {f1:.4f}")
+    print(f"ROC-AUC   : {auc:.4f}\n")
 
-MODELS_PATH.mkdir(
-    parents=True,
-    exist_ok=True
-)
+    print("Classification Report:")
+    print(classification_report(y_test, y_pred))
 
-model_path = MODELS_PATH / "xgboost_baseline.pkl"
+    model_path = MODELS_DIR / "xgboost_baseline.pkl"
+    joblib.dump(model, model_path)
+    print(f"Model saved to: {model_path}")
 
-joblib.dump(
-    model,
-    model_path
-)
+    metrics_df = pd.DataFrame({
+        "metric": ["Accuracy", "Precision", "Recall", "F1", "ROC-AUC"],
+        "value": [acc, prec, rec, f1, auc]
+    })
+    metrics_path = RESULTS_DIR / "baseline_metrics.csv"
+    metrics_df.to_csv(metrics_path, index=False)
+    print(f"Metrics saved to: {metrics_path}")
 
-print("=" * 60)
-print("MODEL SAVED")
-print("=" * 60)
+    # Feature Importance
+    feat_imp = pd.DataFrame({
+        "feature": X_train.columns,
+        "importance": model.feature_importances_
+    }).sort_values(by="importance", ascending=False)
+    feat_imp.to_csv(RESULTS_DIR / "feature_importance.csv", index=False)
 
-print(f"Saved to: {model_path}")
-
-print()
-
-
-# 12. SAVE METRICS
-# ============================================================
-
-metrics = pd.DataFrame({
-    "metric": [
-        "Accuracy",
-        "Precision",
-        "Recall",
-        "F1",
-        "ROC-AUC",
-        "NDCG@5",
-        "NDCG@10"
-    ],
-    "value": [
-        accuracy,
-        precision,
-        recall,
-        f1,
-        roc_auc,
-        ndcg_5,
-        ndcg_10
-    ]
-})
-
-metrics_path = RESULTS_PATH / "baseline_metrics.csv"
-
-metrics.to_csv(
-    metrics_path,
-    index=False
-)
-
-print("Metrics saved to:")
-print(metrics_path)
+if __name__ == "__main__":
+    train_baseline_model()

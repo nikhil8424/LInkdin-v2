@@ -1,0 +1,112 @@
+protected_attribute,feature,importance
+age_group,network_size,0.22730648224541875
+age_group,experience_years,0.18720563559247153
+age_group,previous_interactions,0.14226473039469717
+age_group,topic_similarity,0.02884678328001297
+age_group,author_network_size,0.02877445010883352
+age_group,engagement,0.028474199440751864
+age_group,author_user_similarity,0.027533715985810316
+age_group,post_age_hours,0.027450463133854894
+age_group,author_experience,0.0266014218074186
+age_group,professional_field_Computer Science,0.02265181459493988
+age_group,education_Bachelors,0.02252376698584008
+age_group,professional_field_Marketing,0.021758818418402437
+age_group,education_Masters,0.019949116802657284
+age_group,professional_field_Finance,0.0197540582356167
+age_group,education_Diploma,0.01815468117868812
+age_group,education_PhD,0.01678305506526885
+age_group,professional_field_Other,0.014920890405788392
+age_group,professional_field_Engineering,0.014914278213788257
+age_group,professional_field_Business,0.013667109159182306
+age_group,professional_field_Data Science,0.013344459120004794
+age_group,professional_field_HR,0.013309307880976985
+age_group,professional_field_Design,0.010633791940166908
+age_group,network_distance,0.010480282575431316
+age_group,content_type_Video,0.00384706905149533
+age_group,content_type_Text,0.003714282894964518
+age_group,content_type_Article,0.0034538457990805752
+age_group,content_type_Job Opportunity,0.0033958890655892593
+age_group,post_topic_Leadership,0.003281587768300545
+age_group,post_topic_Software,0.0032408033704371237
+age_group,post_topic_Data Science,0.0031897885404553227
+age_group,content_type_Image,0.003067598486844653
+age_group,post_topic_Design,0.002860022035393236
+age_group,post_topic_AI,0.002774215006750791
+age_group,post_topic_Career,0.002707808868953994
+age_group,post_topic_Machine Learning,0.0026275204952191196
+age_group,post_topic_Finance,0.0022814043668705165
+age_group,post_topic_Marketing,0.002254851683623042
+gender,network_size,0.19906376807549198
+gender,experience_years,0.18592235508240487
+gender,previous_interactions,0.1228366287229709
+gender,author_user_similarity,0.04074748460273405
+gender,education_Diploma,0.03905476709938207
+gender,author_network_size,0.038219046640551424
+gender,topic_similarity,0.037418538839230846
+gender,post_age_hours,0.03662472492931564
+gender,engagement,0.03549069721548076
+gender,author_experience,0.031201938534012034
+gender,education_PhD,0.021151311882916822
+gender,education_Bachelors,0.020252952389204944
+gender,professional_field_Engineering,0.016926187152163156
+gender,professional_field_Business,0.01660378859256754
+gender,professional_field_Other,0.015690949787369405
+gender,professional_field_Finance,0.013858396495673274
+gender,professional_field_Design,0.013789405194625442
+gender,professional_field_Data Science,0.013692076485238111
+gender,professional_field_Marketing,0.013266177603445535
+gender,professional_field_Computer Science,0.013182219696324205
+gender,education_Masters,0.012684639491403707
+gender,professional_field_HR,0.009910596517309828
+gender,network_distance,0.009417839103690435
+gender,post_topic_AI,0.003726901200203274
+gender,content_type_Article,0.0036890152151722233
+gender,post_topic_Leadership,0.0033715359405190014
+gender,post_topic_Marketing,0.0031480568869249907
+gender,content_type_Text,0.0031125976539258995
+gender,post_topic_Finance,0.0030540060234670145
+gender,post_topic_Data Science,0.0030429547154431653
+gender,content_type_Image,0.003014378279118566
+gender,post_topic_Career,0.003010460899158895
+gender,content_type_Job Opportunity,0.0029401729652870374
+gender,post_topic_Design,0.0029195297881316196
+gender,content_type_Video,0.002803788593599494
+gender,post_topic_Machine Learning,0.0026446162320155025
+gender,post_topic_Software,0.0025154954735264125
+location,experience_years,0.19590007264586207
+location,network_size,0.1913578735265381
+location,previous_interactions,0.15975136849854818
+location,education_Masters,0.03302882895668994
+location,education_Bachelors,0.03226896239710041
+location,education_Diploma,0.025896127564456577
+location,education_PhD,0.02517260539025694
+location,professional_field_Business,0.02170583081453639
+location,topic_similarity,0.021556541319379653
+location,author_network_size,0.021450567519645365
+location,engagement,0.021381874770368927
+location,professional_field_Computer Science,0.02132874434671366
+location,author_user_similarity,0.021059165359490983
+location,professional_field_Engineering,0.020517811478036496
+location,author_experience,0.020407921785339175
+location,post_age_hours,0.019482925405049655
+location,professional_field_Data Science,0.01910177902902881
+location,professional_field_HR,0.01869264978560946
+location,professional_field_Finance,0.018173073342953955
+location,professional_field_Design,0.01795370106711564
+location,professional_field_Other,0.01563756857755622
+location,professional_field_Marketing,0.013738901143099936
+location,network_distance,0.007949131649696661
+location,content_type_Text,0.0036592851357912294
+location,content_type_Article,0.0034235523132262287
+location,content_type_Video,0.003049881967160614
+location,post_topic_Leadership,0.002628590753465285
+location,content_type_Job Opportunity,0.0025872168686197424
+location,post_topic_Machine Learning,0.002586254014418483
+location,post_topic_Finance,0.0025750785569273924
+location,post_topic_Data Science,0.00257370172777848
+location,post_topic_Marketing,0.002474126506060892
+location,post_topic_AI,0.002375207380438109
+location,post_topic_Software,0.002257709921949607
+location,post_topic_Design,0.002192128700504647
+location,post_topic_Career,0.0021416851775095573
+location,content_type_Image,0.001961554603076561
