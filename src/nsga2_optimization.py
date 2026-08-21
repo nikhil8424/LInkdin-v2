@@ -317,7 +317,7 @@ def run_nsga2_optimization():
     plt.scatter(selected_balanced["fairness_gap"], selected_balanced["ndcg_at_10"], color="#10B981", s=150, marker="*", edgecolors="black", label="Selected Balanced (50/50)", zorder=6)
 
     plt.title("NSGA-II Multi-Objective Pareto Front: NDCG@10 vs. Fairness Gap", fontsize=13, pad=15)
-    plt.xlabel("Fairness Gap ($|1.0 - \overline{\mathrm{Exposure\ DI}}|$)", fontsize=12)
+    plt.xlabel(r"Fairness Gap ($|1.0 - \overline{\mathrm{Exposure\ DI}}|$)", fontsize=12)
     plt.ylabel("Recommendation Quality (NDCG@10)", fontsize=12)
     plt.grid(True, linestyle="--", alpha=0.6)
     plt.legend(loc="lower left", fontsize=10)
