@@ -1,5 +1,6 @@
 # Fair LinkedIn Recommendation System
-https://fairlinkedin.streamlit.app/
+deployed link  =  https://fairlinkedin.streamlit.app/
+PPT link = https://gamma.app/docs/Fair-LinkedIn-Recommendation-System-jvevron6co034yg
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![XGBoost](https://img.shields.io/badge/model-XGBoost-orange.svg)](https://xgboost.readthedocs.io/)
